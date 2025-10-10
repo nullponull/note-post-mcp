@@ -1,5 +1,5 @@
 {
-  "name": "@go-555/note-post-mcp",
+  "name": "@gonuts555/note-post-mcp",
   "version": "1.0.2",
   "description": "MCP server for automated posting to note.com with draft/publish support",
   "type": "module",
@@ -36,6 +36,14 @@
     "@types/node": "^22.10.2",
     "typescript": "^5.7.2"
   },
-  "author": "",
-  "license": "MIT"
+  "author": "Go-555",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Go-555/note-post-mcp.git"
+  },
+  "homepage": "https://github.com/Go-555/note-post-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/Go-555/note-post-mcp/issues"
+  }
 }
