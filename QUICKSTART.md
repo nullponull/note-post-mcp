@@ -41,7 +41,7 @@ npm run login
   "mcpServers": {
     "note-post-mcp": {
       "command": "npx",
-      "args": ["@Go-555/note-post-mcp@latest"],
+      "args": ["@gonuts555/note-post-mcp@latest"],
       "env": {
         "NOTE_POST_MCP_STATE_PATH": "/Users/yourusername/.note-state.json"
       },
@@ -60,7 +60,7 @@ npm run login
   "mcpServers": {
     "note-post-mcp": {
       "command": "npx",
-      "args": ["@Go-555/note-post-mcp@latest"],
+      "args": ["@gonuts555/note-post-mcp@latest"],
       "env": {
         "NOTE_POST_MCP_STATE_PATH": "/Users/yourusername/.note-state.json"
       }

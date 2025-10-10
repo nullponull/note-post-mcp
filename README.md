@@ -35,7 +35,7 @@ npm install -g note-post-mcp
 Use this one-liner (replace with your real values):
 
 ```bash
-claude mcp add Note Post MCP -s user -e NOTE_POST_MCP_STATE_PATH="/path/to/note-state.json" -- npx @Go-555/note-post-mcp@latest
+claude mcp add Note Post MCP -s user -e NOTE_POST_MCP_STATE_PATH="/path/to/note-state.json" -- npx @gonuts555/note-post-mcp@latest
 ```
 
 To remove:
@@ -53,7 +53,7 @@ Create `.cursor/mcp.json` in your client (do not commit it here):
   "mcpServers": {
     "note-post-mcp": {
       "command": "npx",
-      "args": ["@Go-555/note-post-mcp@latest"],
+      "args": ["@gonuts555/note-post-mcp@latest"],
       "env": {
         "NOTE_POST_MCP_STATE_PATH": "/path/to/note-state.json"
       },
@@ -71,7 +71,7 @@ Create `.cursor/mcp.json` in your client (do not commit it here):
 Install via URI or CLI:
 
 ```bash
-code --add-mcp '{"name":"note-post-mcp","command":"npx","args":["@Go-555/note-post-mcp@latest"],"env":{"NOTE_POST_MCP_STATE_PATH":"/path/to/note-state.json"}}'
+code --add-mcp '{"name":"note-post-mcp","command":"npx","args":["@gonuts555/note-post-mcp@latest"],"env":{"NOTE_POST_MCP_STATE_PATH":"/path/to/note-state.json"}}'
 ```
 
 </details>
@@ -86,7 +86,7 @@ Add to your Claude Desktop configuration file (`claude_desktop_config.json`):
   "mcpServers": {
     "note-post-mcp": {
       "command": "npx",
-      "args": ["@Go-555/note-post-mcp@latest"],
+      "args": ["@gonuts555/note-post-mcp@latest"],
       "env": {
         "NOTE_POST_MCP_STATE_PATH": "/path/to/note-state.json"
       }
@@ -101,7 +101,7 @@ Add to your Claude Desktop configuration file (`claude_desktop_config.json`):
 <summary>LM Studio</summary>
 
 - Command: `npx`
-- Args: `["@Go-555/note-post-mcp@latest"]`
+- Args: `["@gonuts555/note-post-mcp@latest"]`
 - Env: `NOTE_POST_MCP_STATE_PATH=/path/to/note-state.json`
 
 </details>
@@ -111,7 +111,7 @@ Add to your Claude Desktop configuration file (`claude_desktop_config.json`):
 
 - Type: STDIO
 - Command: `npx`
-- Args: `@Go-555/note-post-mcp@latest`
+- Args: `@gonuts555/note-post-mcp@latest`
 - Enabled: true
 
 </details>
@@ -127,7 +127,7 @@ Example `~/.config/opencode/opencode.json`:
   "mcp": {
     "note-post-mcp": {
       "type": "local",
-      "command": ["npx", "@Go-555/note-post-mcp@latest"],
+      "command": ["npx", "@gonuts555/note-post-mcp@latest"],
       "enabled": true,
       "env": {
         "NOTE_POST_MCP_STATE_PATH": "/path/to/note-state.json"
@@ -155,7 +155,7 @@ Add the following to your Windsurf MCP configuration:
 {
   "note-post-mcp": {
     "command": "npx",
-    "args": ["@Go-555/note-post-mcp@latest"],
+    "args": ["@gonuts555/note-post-mcp@latest"],
     "env": {
       "NOTE_POST_MCP_STATE_PATH": "/path/to/note-state.json"
     }
@@ -182,7 +182,7 @@ This server (minimal):
 ```toml
 [mcp_servers.note-post-mcp]
 command = "npx"
-args = ["@Go-555/note-post-mcp@latest"]
+args = ["@gonuts555/note-post-mcp@latest"]
 # Optional environment variables:
 # NOTE_POST_MCP_STATE_PATH = "/path/to/note-state.json"
 # NOTE_POST_MCP_TIMEOUT = "180000"
@@ -332,7 +332,7 @@ For saving a draft:
 
 ### Example
 
-- **Correct**: `"mcpServers": { "note-post-mcp": { "command": "npx", "args": ["@Go-555/note-post-mcp@latest"] } }`
+- **Correct**: `"mcpServers": { "note-post-mcp": { "command": "npx", "args": ["@gonuts555/note-post-mcp@latest"] } }`
 - **Incorrect**: Using different keys like `"NotePost"` or `"note_post"` (will conflict with `note-post-mcp`)
 
 ## License
