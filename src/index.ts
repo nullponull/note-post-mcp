@@ -191,9 +191,13 @@ async function postToNote(params: {
     const context = await browser.newContext({
       storageState: statePath,
       locale: 'ja-JP',
+      permissions: ['clipboard-read', 'clipboard-write'],
     });
     const page = await context.newPage();
     page.setDefaultTimeout(timeout);
+    
+    // クリップボード権限を明示的に付与
+    await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: 'https://editor.note.com' });
 
     // 新規記事作成ページに移動
     const startUrl = 'https://editor.note.com/new';
@@ -305,6 +309,8 @@ async function postToNote(params: {
     await bodyBox.click();
     
     const lines = body.split('\n');
+    let previousLineWasList = false; // 前の行がリスト項目だったかを追跡
+    
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const isLastLine = i === lines.length - 1;
@@ -317,54 +323,80 @@ async function postToNote(params: {
         if (!imagePath.startsWith('http://') && !imagePath.startsWith('https://')) {
           const imageInfo = images.find(img => img.localPath === imagePath);
           if (imageInfo && fs.existsSync(imageInfo.absolutePath)) {
-            log('Uploading inline image', { path: imageInfo.absolutePath });
+            log('Pasting inline image', { path: imageInfo.absolutePath });
             
-            // 「+」ボタンをクリック（本文内）
-            const addButtons = page.locator('button[aria-label="挿入"]');
-            let addButton = addButtons.last(); // 本文エリアの「+」ボタン
+            // 画像をクリップボードにコピーしてペーストする方法
+            // 1. 改行して新しい行を作成
+            await page.keyboard.press('Enter');
+            await page.waitForTimeout(300);
             
-            // 「+」ボタンが見つからない場合の代替方法
-            if (await addButton.count() === 0) {
-              // Enterを押して新しい行を作成し、+ボタンを表示
-              await page.keyboard.press('Enter');
-              await page.waitForTimeout(300);
-              addButton = addButtons.last();
+            // 2. 画像ファイルをクリップボードにコピー
+            const imageBuffer = fs.readFileSync(imageInfo.absolutePath);
+            const base64Image = imageBuffer.toString('base64');
+            const mimeType = imageInfo.absolutePath.endsWith('.png') ? 'image/png' : 
+                           imageInfo.absolutePath.endsWith('.jpg') || imageInfo.absolutePath.endsWith('.jpeg') ? 'image/jpeg' :
+                           imageInfo.absolutePath.endsWith('.gif') ? 'image/gif' : 'image/png';
+            
+            // クリップボードに画像を設定するためのJavaScriptを実行
+            await page.evaluate(async ({ base64, mime }) => {
+              const response = await fetch(`data:${mime};base64,${base64}`);
+              const blob = await response.blob();
+              const item = new ClipboardItem({ [mime]: blob });
+              await navigator.clipboard.write([item]);
+            }, { base64: base64Image, mime: mimeType });
+            
+            await page.waitForTimeout(500);
+            
+            // 3. Cmd+V (macOS) または Ctrl+V でペースト
+            const isMac = process.platform === 'darwin';
+            if (isMac) {
+              await page.keyboard.press('Meta+v');
+            } else {
+              await page.keyboard.press('Control+v');
             }
             
-            await addButton.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
-            await addButton.click({ force: true });
-            await page.waitForTimeout(500);
+            // ペースト完了を待つ
+            await page.waitForTimeout(2000);
             
-            // 「画像」を選択
-            const imageOption = page.locator('button:has-text("画像"), [role="menuitem"]:has-text("画像")').first();
-            await imageOption.waitFor({ state: 'visible', timeout: 5000 });
-            await imageOption.click();
-            await page.waitForTimeout(500);
-            
-            // ファイル選択
-            const fileChooserPromise = page.waitForEvent('filechooser', { timeout: 10000 });
-            const uploadImageBtn = page.locator('button:has-text("画像をアップロード")').first();
-            await uploadImageBtn.click();
-            const fileChooser = await fileChooserPromise;
-            await fileChooser.setFiles(imageInfo.absolutePath);
-            
-            // アップロード完了を待つ
-            await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-            await page.waitForTimeout(1000);
-            
-            log('Inline image uploaded');
+            log('Inline image pasted');
             
             // 画像の後に改行してテキストボックスに戻る
             if (!isLastLine) {
               await page.keyboard.press('Enter');
             }
+            previousLineWasList = false; // 画像の後はリストではない
             continue; // 次の行へ
           }
         }
       }
       
+      // 現在の行がリスト項目かどうかをチェック
+      const isBulletList = /^(\s*)- /.test(line);
+      const isNumberedList = /^(\s*)\d+\.\s/.test(line);
+      const isCurrentLineList = isBulletList || isNumberedList;
+      
       // 通常のテキスト行を入力
-      await page.keyboard.type(line);
+      let processedLine = line;
+      
+      // 前の行がリスト項目で、現在の行もリスト項目なら、マークダウン記号を削除
+      if (previousLineWasList && isCurrentLineList) {
+        // 箇条書きリスト: "- " または "  - " などを削除
+        // 先頭のスペース（インデント）を保持しつつ、"- " だけを削除
+        if (isBulletList) {
+          processedLine = processedLine.replace(/^(\s*)- /, '$1');
+        }
+        
+        // 番号付きリスト: "1. " または "  1. " などを削除
+        // 先頭のスペース（インデント）を保持しつつ、"数字. " だけを削除
+        if (isNumberedList) {
+          processedLine = processedLine.replace(/^(\s*)\d+\.\s/, '$1');
+        }
+      }
+      
+      await page.keyboard.type(processedLine);
+      
+      // 次の行のために、現在の行がリスト項目だったかを記録
+      previousLineWasList = isCurrentLineList;
       
       // URL単独行の場合、追加でEnterを押してリンクカード化をトリガー
       const isUrlLine = /^https?:\/\/[^\s]+$/.test(line.trim());
