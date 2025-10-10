@@ -1,10 +1,9 @@
 #!/usr/bin/env node
-'use strict';
 
-const { chromium } = require('playwright');
-const fs = require('fs');
-const path = require('path');
-const readline = require('readline');
+import { chromium } from 'playwright';
+import fs from 'fs';
+import path from 'path';
+import readline from 'readline';
 
 // デフォルトの保存先
 const DEFAULT_STATE_PATH = path.join(process.env.HOME || process.env.USERPROFILE, '.note-state.json');
