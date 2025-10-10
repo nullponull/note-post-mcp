@@ -310,10 +310,23 @@ async function postToNote(params: {
     
     const lines = body.split('\n');
     let previousLineWasList = false; // 前の行がリスト項目だったかを追跡
+    let previousLineWasQuote = false; // 前の行が引用だったかを追跡
+    let previousLineWasHorizontalRule = false; // 前の行が水平線だったかを追跡
     
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const isLastLine = i === lines.length - 1;
+      
+      // 次の行が水平線かどうかをチェック
+      const nextLine = i < lines.length - 1 ? lines[i + 1] : '';
+      const nextLineIsHorizontalRule = nextLine.trim() === '---';
+      
+      // 水平線の直後の空行をスキップ
+      if (previousLineWasHorizontalRule && line.trim() === '') {
+        previousLineWasHorizontalRule = false;
+        continue; // 空行をスキップ
+      }
+      previousLineWasHorizontalRule = false;
       
       // 画像マークダウンを検出
       const imageMatch = line.match(/!\[([^\]]*)\]\(([^)]+)\)/);
@@ -365,15 +378,23 @@ async function postToNote(params: {
               await page.keyboard.press('Enter');
             }
             previousLineWasList = false; // 画像の後はリストではない
+            previousLineWasQuote = false; // 画像の後は引用ではない
+            previousLineWasHorizontalRule = false; // 画像の後は水平線ではない
             continue; // 次の行へ
           }
         }
       }
       
+      // 水平線かどうかをチェック
+      const isHorizontalRule = line.trim() === '---';
+      
       // 現在の行がリスト項目かどうかをチェック
       const isBulletList = /^(\s*)- /.test(line);
       const isNumberedList = /^(\s*)\d+\.\s/.test(line);
       const isCurrentLineList = isBulletList || isNumberedList;
+      
+      // 現在の行が引用かどうかをチェック
+      const isQuote = /^>/.test(line);
       
       // 通常のテキスト行を入力
       let processedLine = line;
@@ -393,10 +414,18 @@ async function postToNote(params: {
         }
       }
       
+      // 前の行が引用で、現在の行も引用なら、マークダウン記号を削除
+      if (previousLineWasQuote && isQuote) {
+        // 引用: "> " を削除
+        processedLine = processedLine.replace(/^>\s?/, '');
+      }
+      
       await page.keyboard.type(processedLine);
       
-      // 次の行のために、現在の行がリスト項目だったかを記録
+      // 次の行のために、現在の行の状態を記録
       previousLineWasList = isCurrentLineList;
+      previousLineWasQuote = isQuote;
+      previousLineWasHorizontalRule = isHorizontalRule;
       
       // URL単独行の場合、追加でEnterを押してリンクカード化をトリガー
       const isUrlLine = /^https?:\/\/[^\s]+$/.test(line.trim());
@@ -412,6 +441,102 @@ async function postToNote(params: {
     }
     
     log('Body set');
+    
+    // 水平線の後の余分な空白ブロックを削除
+    try {
+      log('Cleaning up empty blocks after horizontal rules');
+      
+      // まず、水平線がどのように表現されているかを調査
+      const hrInfo = await page.evaluate(() => {
+        const allElements = Array.from(document.querySelectorAll('*'));
+        const hrElements: any[] = [];
+        const possibleHrElements: any[] = [];
+        
+        // <hr>タグを探す
+        const hrs = document.querySelectorAll('hr');
+        hrs.forEach((hr, index) => {
+          hrElements.push({
+            type: 'hr',
+            index,
+            html: hr.outerHTML,
+            nextSibling: hr.nextElementSibling?.outerHTML || 'none'
+          });
+        });
+        
+        // "---"を含む要素を探す
+        allElements.forEach((el) => {
+          if (el.textContent?.includes('---') || el.innerHTML?.includes('---')) {
+            possibleHrElements.push({
+              tag: el.tagName,
+              class: el.className,
+              text: el.textContent?.substring(0, 100),
+              html: el.outerHTML.substring(0, 200)
+            });
+          }
+        });
+        
+        return {
+          hrCount: hrs.length,
+          hrElements,
+          possibleHrCount: possibleHrElements.length,
+          possibleHrElements: possibleHrElements.slice(0, 3) // 最初の3つだけ
+        };
+      });
+      
+      log('HR investigation', hrInfo);
+      
+      // 水平線が見つかった場合のみ処理
+      if (hrInfo.hrCount > 0) {
+        // JavaScriptを実行して水平線の後の空ブロックを検出
+        const emptyBlocksAfterHr = await page.evaluate(() => {
+          const hrs = document.querySelectorAll('hr');
+          const positions: number[] = [];
+          
+          hrs.forEach((hr, index) => {
+            const nextElement = hr.nextElementSibling;
+            // 次の要素が空のdiv（テキストがない）かをチェック
+            if (nextElement && 
+                nextElement.textContent?.trim() === '') {
+              positions.push(index);
+            }
+          });
+          
+          return positions;
+        });
+        
+        // 検出された空ブロックを削除
+        if (emptyBlocksAfterHr.length > 0) {
+          log(`Found ${emptyBlocksAfterHr.length} empty blocks after horizontal rules, removing them`);
+          
+          for (const position of emptyBlocksAfterHr) {
+            // 各水平線要素の後の空ブロックにクリックしてBackspaceで削除
+            const hrs = page.locator('hr');
+            const hr = hrs.nth(position);
+            
+            // 水平線の後の要素（空ブロック）をクリック
+            await hr.evaluate((el) => {
+              const nextEl = el.nextElementSibling as HTMLElement;
+              if (nextEl && nextEl.textContent?.trim() === '') {
+                nextEl.click();
+              }
+            });
+            
+            await page.waitForTimeout(100);
+            await page.keyboard.press('Backspace');
+            await page.waitForTimeout(100);
+          }
+          
+          log('Empty blocks removed');
+        } else {
+          log('No empty blocks found after horizontal rules');
+        }
+      } else {
+        log('Warning: No <hr> elements found, horizontal rules might not be converted yet');
+      }
+    } catch (error) {
+      log('Warning: Failed to clean up empty blocks', error);
+      // エラーが起きても処理は続行
+    }
 
     // 下書き保存の場合
     if (!isPublic) {
