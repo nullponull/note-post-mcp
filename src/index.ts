@@ -36,6 +36,43 @@ function nowStr(): string {
   return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}_${z(d.getHours())}-${z(d.getMinutes())}-${z(d.getSeconds())}`;
 }
 
+// 画像情報の型定義
+interface ImageInfo {
+  alt: string;
+  localPath: string;
+  absolutePath: string;
+  placeholder: string;
+}
+
+// Markdownから画像パスを抽出する関数
+function extractImages(markdown: string, baseDir: string): ImageInfo[] {
+  const imageRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
+  const images: ImageInfo[] = [];
+  let match;
+
+  while ((match = imageRegex.exec(markdown)) !== null) {
+    const alt = match[1] || 'image';
+    const imagePath = match[2];
+    
+    // URLではなくローカルパスの場合のみ処理
+    if (!imagePath.startsWith('http://') && !imagePath.startsWith('https://')) {
+      const absolutePath = path.resolve(baseDir, imagePath);
+      if (fs.existsSync(absolutePath)) {
+        images.push({
+          alt,
+          localPath: imagePath,
+          absolutePath,
+          placeholder: match[0], // 元のマークダウン記法全体
+        });
+      } else {
+        log(`Warning: Image file not found: ${absolutePath}`);
+      }
+    }
+  }
+
+  return images;
+}
+
 // Markdownファイルをパースする関数
 function parseMarkdown(content: string): {
   title: string;
@@ -129,8 +166,12 @@ async function postToNote(params: {
   }
   const mdContent = fs.readFileSync(markdownPath, 'utf-8');
   const { title, body, tags } = parseMarkdown(mdContent);
+  
+  // 本文中の画像を抽出
+  const baseDir = path.dirname(markdownPath);
+  const images = extractImages(body, baseDir);
 
-  log('Parsed markdown', { title, bodyLength: body.length, tags });
+  log('Parsed markdown', { title, bodyLength: body.length, tags, imageCount: images.length });
 
   // 認証状態ファイルを確認
   if (!fs.existsSync(statePath)) {
@@ -258,7 +299,7 @@ async function postToNote(params: {
     await page.fill('textarea[placeholder*="タイトル"]', title);
     log('Title set');
 
-    // 本文設定（行ごとに処理してURLをリンクカードに変換）
+    // 本文設定（行ごとに処理してURLをリンクカードに変換、画像を埋め込む）
     const bodyBox = page.locator('div[contenteditable="true"][role="textbox"]').first();
     await bodyBox.waitFor({ state: 'visible' });
     await bodyBox.click();
@@ -268,7 +309,61 @@ async function postToNote(params: {
       const line = lines[i];
       const isLastLine = i === lines.length - 1;
       
-      // 行を入力
+      // 画像マークダウンを検出
+      const imageMatch = line.match(/!\[([^\]]*)\]\(([^)]+)\)/);
+      if (imageMatch) {
+        const imagePath = imageMatch[2];
+        // ローカルパスの画像をアップロード
+        if (!imagePath.startsWith('http://') && !imagePath.startsWith('https://')) {
+          const imageInfo = images.find(img => img.localPath === imagePath);
+          if (imageInfo && fs.existsSync(imageInfo.absolutePath)) {
+            log('Uploading inline image', { path: imageInfo.absolutePath });
+            
+            // 「+」ボタンをクリック（本文内）
+            const addButtons = page.locator('button[aria-label="挿入"]');
+            let addButton = addButtons.last(); // 本文エリアの「+」ボタン
+            
+            // 「+」ボタンが見つからない場合の代替方法
+            if (await addButton.count() === 0) {
+              // Enterを押して新しい行を作成し、+ボタンを表示
+              await page.keyboard.press('Enter');
+              await page.waitForTimeout(300);
+              addButton = addButtons.last();
+            }
+            
+            await addButton.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
+            await addButton.click({ force: true });
+            await page.waitForTimeout(500);
+            
+            // 「画像」を選択
+            const imageOption = page.locator('button:has-text("画像"), [role="menuitem"]:has-text("画像")').first();
+            await imageOption.waitFor({ state: 'visible', timeout: 5000 });
+            await imageOption.click();
+            await page.waitForTimeout(500);
+            
+            // ファイル選択
+            const fileChooserPromise = page.waitForEvent('filechooser', { timeout: 10000 });
+            const uploadImageBtn = page.locator('button:has-text("画像をアップロード")').first();
+            await uploadImageBtn.click();
+            const fileChooser = await fileChooserPromise;
+            await fileChooser.setFiles(imageInfo.absolutePath);
+            
+            // アップロード完了を待つ
+            await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+            await page.waitForTimeout(1000);
+            
+            log('Inline image uploaded');
+            
+            // 画像の後に改行してテキストボックスに戻る
+            if (!isLastLine) {
+              await page.keyboard.press('Enter');
+            }
+            continue; // 次の行へ
+          }
+        }
+      }
+      
+      // 通常のテキスト行を入力
       await page.keyboard.type(line);
       
       // URL単独行の場合、追加でEnterを押してリンクカード化をトリガー
