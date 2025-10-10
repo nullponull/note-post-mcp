@@ -1,5 +1,7 @@
 # セットアップガイド（日本語）
 
+[![GitHub](https://img.shields.io/badge/GitHub-Go--555%2Fnote--post--mcp-blue?logo=github)](https://github.com/Go-555/note-post-mcp)
+
 note.com 自動投稿 MCP サーバーのセットアップ方法を説明します。
 
 ## 前提条件
@@ -10,10 +12,11 @@ note.com 自動投稿 MCP サーバーのセットアップ方法を説明しま
 
 ## インストール手順
 
-### 1. リポジトリのビルド
+### 1. リポジトリのクローンとビルド
 
 ```bash
-cd /path/to/note-gonuts-mcp
+git clone https://github.com/Go-555/note-post-mcp.git
+cd note-post-mcp
 npm install
 npm run build
 ```

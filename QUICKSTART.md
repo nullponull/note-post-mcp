@@ -1,5 +1,7 @@
 # クイックスタートガイド
 
+[![GitHub](https://img.shields.io/badge/GitHub-Go--555%2Fnote--post--mcp-blue?logo=github)](https://github.com/Go-555/note-post-mcp)
+
 note.com 自動投稿 MCP サーバーを素早く始めるための手順です。
 
 ## 5ステップでスタート
@@ -7,7 +9,8 @@ note.com 自動投稿 MCP サーバーを素早く始めるための手順です
 ### 1. インストール
 
 ```bash
-cd /Users/hiroshimago/Documents/forone/note-gonuts-mcp
+git clone https://github.com/Go-555/note-post-mcp.git
+cd note-post-mcp
 npm install
 npm run build
 ```

@@ -1,5 +1,7 @@
 # Note Post MCP
 
+[![GitHub](https://img.shields.io/badge/GitHub-Go--555%2Fnote--post--mcp-blue?logo=github)](https://github.com/Go-555/note-post-mcp)
+
 The Universal MCP Server exposes tools for automated posting and draft saving to note.com. It reads Markdown files containing titles, body text, and tags, then publishes them to your note.com account using Playwright automation.
 
 ## Installation
@@ -15,11 +17,17 @@ The Universal MCP Server exposes tools for automated posting and draft saving to
 - This can be generated using a Playwright login script that saves the browser's storage state after successful authentication.
 - Store this file securely and reference it via `NOTE_POST_MCP_STATE_PATH` or pass it as a parameter.
 
-### Build locally
+### Install from GitHub
 ```bash
-cd /path/to/note-post-mcp
-npm i
+git clone https://github.com/Go-555/note-post-mcp.git
+cd note-post-mcp
+npm install
 npm run build
+```
+
+### Or install from npm (if published)
+```bash
+npm install -g note-post-mcp
 ```
 
 ## Setup: Claude Code (CLI)
