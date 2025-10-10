@@ -1,6 +1,6 @@
 {
   "name": "@gonuts555/note-post-mcp",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "MCP server for automated posting to note.com with draft/publish support",
   "type": "module",
   "main": "./build/index.js",
