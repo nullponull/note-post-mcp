@@ -258,18 +258,33 @@ async function postToNote(params: {
     await page.fill('textarea[placeholder*="タイトル"]', title);
     log('Title set');
 
-    // 本文設定
+    // 本文設定（行ごとに処理してURLをリンクカードに変換）
     const bodyBox = page.locator('div[contenteditable="true"][role="textbox"]').first();
     await bodyBox.waitFor({ state: 'visible' });
     await bodyBox.click();
-    await page.keyboard.type(body);
-    log('Body set');
-
-    // URLが含まれる場合は改行を追加（自動展開トリガー）
-    if (/https?:\/\//.test(body)) {
-      await page.keyboard.press('Enter');
-      await page.waitForTimeout(1000);
+    
+    const lines = body.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const isLastLine = i === lines.length - 1;
+      
+      // 行を入力
+      await page.keyboard.type(line);
+      
+      // URL単独行の場合、追加でEnterを押してリンクカード化をトリガー
+      const isUrlLine = /^https?:\/\/[^\s]+$/.test(line.trim());
+      if (isUrlLine) {
+        await page.keyboard.press('Enter');
+        await page.waitForTimeout(800); // リンクカード展開を待つ
+      }
+      
+      // 最後の行でなければ改行
+      if (!isLastLine) {
+        await page.keyboard.press('Enter');
+      }
     }
+    
+    log('Body set');
 
     // 下書き保存の場合
     if (!isPublic) {
