@@ -9,13 +9,8 @@ The Universal MCP Server exposes tools for automated posting and draft saving to
 ### Prerequisites
 - Node.js 18+
 - A note.com account
-- `note-state.json` authentication state file (obtained via separate login script)
+- `note-state.json` authentication state file (obtained via `npm run login`)
 - Set `NOTE_POST_MCP_STATE_PATH` in your environment (optional, defaults to `~/.note-state.json`)
-
-### Get an authentication state file
-- You need to obtain a `note-state.json` file containing your note.com authentication state.
-- This can be generated using a Playwright login script that saves the browser's storage state after successful authentication.
-- Store this file securely and reference it via `NOTE_POST_MCP_STATE_PATH` or pass it as a parameter.
 
 ### Install from GitHub
 ```bash
@@ -24,6 +19,23 @@ cd note-post-mcp
 npm install
 npm run build
 ```
+
+### Install Playwright Browser
+```bash
+npm run install-browser
+```
+
+This installs the Chromium browser required for automation.
+
+### Get an authentication state file
+
+Run the login script to authenticate with note.com:
+
+```bash
+npm run login
+```
+
+A browser window will open. Log in to note.com, then press Enter in the terminal. This creates a `~/.note-state.json` file containing your authentication state. Store this file securely and reference it via `NOTE_POST_MCP_STATE_PATH` or pass it as a parameter.
 
 ### Or install from npm (if published)
 ```bash
@@ -267,6 +279,41 @@ Or use a simple `#` heading for the title if no front matter is present:
 Your article body content goes here.
 ```
 
+### Body Content Details
+
+The body content supports the following Markdown elements:
+
+**Front Matter Format:**
+- All lines after the closing `---` of the front matter are treated as body content
+- Trailing blank lines are automatically trimmed
+
+**Heading Format:**
+- The first line starting with `# ` is treated as the title (not included in the body)
+- Headings with `## ` or `### ` are treated as part of the body content
+
+**Code Blocks:**
+- Must have a closing fence (```)
+- Language specification is preserved
+- Entire code blocks are pasted as a unit
+
+**Image Insertion:**
+- Use relative paths from the Markdown file: `![description](./images/sample.png)`
+- Supports PNG, JPEG, and GIF formats
+- Local image files are automatically uploaded
+
+**Lists and Quotes:**
+- Bullet lists (`-`) and numbered lists (`1.`) are automatically continued by note.com
+- Block quotes (`>`) are also automatically continued
+- Markdown symbols are processed automatically after the first line
+
+**Horizontal Rules:**
+- `---` in the body content is correctly processed as a horizontal rule
+- Blank lines immediately following horizontal rules are automatically skipped
+
+**URL Single Lines:**
+- URLs on their own line are automatically expanded into link cards by note.com
+- YouTube and other embeds are also automatically processed
+
 ## Example invocation (MCP tool call)
 
 ```json
@@ -299,7 +346,7 @@ For saving a draft:
 - **Local runs**: After building, test locally with `npx note-post-mcp` (it will wait for MCP messages on stdin).
 - **Inspect publish artifacts**: Run `npm pack --dry-run` to see what files will be included in the published package.
 - **Timeout issues**: If operations are timing out, increase `NOTE_POST_MCP_TIMEOUT` or pass a larger `timeout` parameter.
-- **Playwright browser not installed**: Run `npx playwright install chromium` to install the required browser.
+- **Playwright browser not installed**: Run `npm run install-browser` or `npx playwright install chromium` to install the required browser.
 
 ## References
 
