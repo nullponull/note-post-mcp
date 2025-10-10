@@ -431,112 +431,21 @@ async function postToNote(params: {
       const isUrlLine = /^https?:\/\/[^\s]+$/.test(line.trim());
       if (isUrlLine) {
         await page.keyboard.press('Enter');
-        await page.waitForTimeout(800); // リンクカード展開を待つ
-      }
-      
-      // 最後の行でなければ改行
-      if (!isLastLine) {
-        await page.keyboard.press('Enter');
+        // リンクカード展開のアニメーション完了を待機
+        await page.waitForTimeout(1200);
+
+        // キャレットがカード内に残らないよう、確実に次段落へ移動
+        await page.keyboard.press('ArrowDown');
+        await page.waitForTimeout(150);
+      } else {
+        // URL以外の行の場合のみ、最後の行でなければ改行
+        if (!isLastLine) {
+          await page.keyboard.press('Enter');
+        }
       }
     }
     
     log('Body set');
-    
-    // 水平線の後の余分な空白ブロックを削除
-    try {
-      log('Cleaning up empty blocks after horizontal rules');
-      
-      // まず、水平線がどのように表現されているかを調査
-      const hrInfo = await page.evaluate(() => {
-        const allElements = Array.from(document.querySelectorAll('*'));
-        const hrElements: any[] = [];
-        const possibleHrElements: any[] = [];
-        
-        // <hr>タグを探す
-        const hrs = document.querySelectorAll('hr');
-        hrs.forEach((hr, index) => {
-          hrElements.push({
-            type: 'hr',
-            index,
-            html: hr.outerHTML,
-            nextSibling: hr.nextElementSibling?.outerHTML || 'none'
-          });
-        });
-        
-        // "---"を含む要素を探す
-        allElements.forEach((el) => {
-          if (el.textContent?.includes('---') || el.innerHTML?.includes('---')) {
-            possibleHrElements.push({
-              tag: el.tagName,
-              class: el.className,
-              text: el.textContent?.substring(0, 100),
-              html: el.outerHTML.substring(0, 200)
-            });
-          }
-        });
-        
-        return {
-          hrCount: hrs.length,
-          hrElements,
-          possibleHrCount: possibleHrElements.length,
-          possibleHrElements: possibleHrElements.slice(0, 3) // 最初の3つだけ
-        };
-      });
-      
-      log('HR investigation', hrInfo);
-      
-      // 水平線が見つかった場合のみ処理
-      if (hrInfo.hrCount > 0) {
-        // JavaScriptを実行して水平線の後の空ブロックを検出
-        const emptyBlocksAfterHr = await page.evaluate(() => {
-          const hrs = document.querySelectorAll('hr');
-          const positions: number[] = [];
-          
-          hrs.forEach((hr, index) => {
-            const nextElement = hr.nextElementSibling;
-            // 次の要素が空のdiv（テキストがない）かをチェック
-            if (nextElement && 
-                nextElement.textContent?.trim() === '') {
-              positions.push(index);
-            }
-          });
-          
-          return positions;
-        });
-        
-        // 検出された空ブロックを削除
-        if (emptyBlocksAfterHr.length > 0) {
-          log(`Found ${emptyBlocksAfterHr.length} empty blocks after horizontal rules, removing them`);
-          
-          for (const position of emptyBlocksAfterHr) {
-            // 各水平線要素の後の空ブロックにクリックしてBackspaceで削除
-            const hrs = page.locator('hr');
-            const hr = hrs.nth(position);
-            
-            // 水平線の後の要素（空ブロック）をクリック
-            await hr.evaluate((el) => {
-              const nextEl = el.nextElementSibling as HTMLElement;
-              if (nextEl && nextEl.textContent?.trim() === '') {
-                nextEl.click();
-              }
-            });
-            
-            await page.waitForTimeout(100);
-            await page.keyboard.press('Backspace');
-            await page.waitForTimeout(100);
-          }
-          
-          log('Empty blocks removed');
-        } else {
-          log('No empty blocks found after horizontal rules');
-        }
-      } else {
-        log('Warning: No <hr> elements found, horizontal rules might not be converted yet');
-      }
-    } catch (error) {
-      log('Warning: Failed to clean up empty blocks', error);
-      // エラーが起きても処理は続行
-    }
 
     // 下書き保存の場合
     if (!isPublic) {
