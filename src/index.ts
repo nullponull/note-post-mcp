@@ -317,6 +317,55 @@ async function postToNote(params: {
       const line = lines[i];
       const isLastLine = i === lines.length - 1;
       
+      // コードブロックの開始を検出
+      if (line.trim().startsWith('```')) {
+        // コードブロック全体（```から```まで）を収集
+        const codeBlockLines: string[] = [line]; // 開始行を含める
+        let j = i + 1;
+        
+        // 終了行まで収集
+        while (j < lines.length) {
+          codeBlockLines.push(lines[j]);
+          if (lines[j].trim().startsWith('```')) {
+            break; // 終了行を含めて終了
+          }
+          j++;
+        }
+        
+        // コードブロック全体をクリップボードにコピー
+        const codeBlockContent = codeBlockLines.join('\n');
+        
+        await page.evaluate((text) => {
+          return navigator.clipboard.writeText(text);
+        }, codeBlockContent);
+        
+        await page.waitForTimeout(200);
+        
+        // ペースト
+        const isMac = process.platform === 'darwin';
+        if (isMac) {
+          await page.keyboard.press('Meta+v');
+        } else {
+          await page.keyboard.press('Control+v');
+        }
+        
+        await page.waitForTimeout(300);
+        
+        // コードブロックの後に改行（最終行でない場合）
+        if (j < lines.length - 1) {
+          await page.keyboard.press('Enter');
+        }
+        
+        // iをコードブロック終了行まで進める
+        i = j;
+        
+        // フラグをリセット
+        previousLineWasList = false;
+        previousLineWasQuote = false;
+        previousLineWasHorizontalRule = false;
+        continue;
+      }
+      
       // 次の行が水平線かどうかをチェック
       const nextLine = i < lines.length - 1 ? lines[i + 1] : '';
       const nextLineIsHorizontalRule = nextLine.trim() === '---';
@@ -434,9 +483,11 @@ async function postToNote(params: {
         // リンクカード展開のアニメーション完了を待機
         await page.waitForTimeout(1200);
 
-        // キャレットがカード内に残らないよう、確実に次段落へ移動
-        await page.keyboard.press('ArrowDown');
-        await page.waitForTimeout(150);
+        // 次の行がある場合、キャレットがカード内に残らないよう、確実に次段落へ移動
+        if (!isLastLine) {
+          await page.keyboard.press('ArrowDown');
+          await page.waitForTimeout(150);
+        }
       } else {
         // URL以外の行の場合のみ、最後の行でなければ改行
         if (!isLastLine) {
