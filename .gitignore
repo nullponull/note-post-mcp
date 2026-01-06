@@ -9,3 +9,21 @@ screenshots/
 data/
 note-state.json
 
+# Debug scripts (not needed in release)
+debug-*.cjs
+debug-*.mjs
+check-*.cjs
+explore-*.cjs
+find-*.cjs
+get-*.cjs
+investigate-*.cjs
+iterate-*.cjs
+publish-drafts.cjs
+publish-single.cjs
+run-test-post.mjs
+real-test.mjs
+test-*.js
+test-*.mjs
+do-publish.mjs
+final-publish.mjs
+

@@ -1,71 +1,65 @@
 # Note Post MCP
 
-[![GitHub](https://img.shields.io/badge/GitHub-Go--555%2Fnote--post--mcp-blue?logo=github)](https://github.com/Go-555/note-post-mcp)
+[![GitHub](https://img.shields.io/badge/GitHub-nullponull%2Fnote--post--mcp-blue?logo=github)](https://github.com/nullponull/note-post-mcp)
 
-The Universal MCP Server exposes tools for automated posting and draft saving to note.com. It reads Markdown files containing titles, body text, and tags, then publishes them to your note.com account using Playwright automation.
+note.comへの記事投稿を自動化するMCPサーバーです。Markdownファイルからタイトル、本文、タグ、価格設定を読み取り、Playwrightを使用してnote.comに投稿します。
 
-## Installation
+## 主な機能
 
-### Prerequisites
+- **MCP経由での単体投稿** - Claude等のAIアシスタントから直接記事を投稿
+- **バッチ投稿スクリプト** - 複数の記事を連続して自動投稿
+- **有料記事対応** - 価格設定（有料ラインの位置指定は未実装）
+- **下書き保存** - 公開せずに下書きとして保存
+- **タグ設定** - Front Matterで指定したタグを自動入力
+
+## インストール
+
+### 必要要件
 - Node.js 18+
-- A note.com account
-- `note-state.json` authentication state file (obtained via `npm run login`)
-- Set `NOTE_POST_MCP_STATE_PATH` in your environment (optional, defaults to `~/.note-state.json`)
+- note.comアカウント
+- 認証状態ファイル `note-state.json`（`npm run login`で取得）
 
-### Install from GitHub
+### GitHubからインストール
 ```bash
-git clone https://github.com/Go-555/note-post-mcp.git
+git clone https://github.com/nullponull/note-post-mcp.git
 cd note-post-mcp
 npm install
 npm run build
 ```
 
-### Install Playwright Browser
+### Playwrightブラウザのインストール
 ```bash
 npm run install-browser
 ```
 
-This installs the Chromium browser required for automation.
+### 認証状態ファイルの取得
 
-### Get an authentication state file
-
-Run the login script to authenticate with note.com:
+ログインスクリプトを実行してnote.comの認証状態を取得します：
 
 ```bash
 npm run login
 ```
 
-A browser window will open. Log in to note.com, then press Enter in the terminal. This creates a `~/.note-state.json` file containing your authentication state. Store this file securely and reference it via `NOTE_POST_MCP_STATE_PATH` or pass it as a parameter.
+ブラウザが開くので、note.comにログインしてからターミナルでEnterを押してください。`~/.note-state.json`に認証状態が保存されます。
 
-### Or install from npm (if published)
-```bash
-npm install -g note-post-mcp
-```
+## MCPサーバーとして使用
 
-## Setup: Claude Code (CLI)
-
-Use this one-liner (replace with your real values):
+### Claude Code (CLI)
 
 ```bash
-claude mcp add Note Post MCP -s user -e NOTE_POST_MCP_STATE_PATH="/path/to/note-state.json" -- npx @gonuts555/note-post-mcp@latest
+claude mcp add note-post-mcp -s user -e NOTE_POST_MCP_STATE_PATH="/path/to/note-state.json" -- npx note-post-mcp
 ```
 
-To remove:
+### Cursor
 
-```bash
-claude mcp remove Note Post MCP
-```
-
-## Setup: Cursor
-
-Create `.cursor/mcp.json` in your client (do not commit it here):
+`.cursor/mcp.json`を作成：
 
 ```json
 {
   "mcpServers": {
     "note-post-mcp": {
       "command": "npx",
-      "args": ["@gonuts555/note-post-mcp@latest"],
+      "args": ["note-post-mcp"],
       "env": {
         "NOTE_POST_MCP_STATE_PATH": "/path/to/note-state.json"
       },
@@ -75,30 +69,16 @@ Create `.cursor/mcp.json` in your client (do not commit it here):
 }
 ```
 
-## Other Clients and Agents
+### Claude Desktop
 
-<details>
-<summary>VS Code</summary>
-
-Install via URI or CLI:
-
-```bash
-code --add-mcp '{"name":"note-post-mcp","command":"npx","args":["@gonuts555/note-post-mcp@latest"],"env":{"NOTE_POST_MCP_STATE_PATH":"/path/to/note-state.json"}}'
-```
-
-</details>
-
-<details>
-<summary>Claude Desktop</summary>
-
-Add to your Claude Desktop configuration file (`claude_desktop_config.json`):
+`claude_desktop_config.json`に追加：
 
 ```json
 {
   "mcpServers": {
     "note-post-mcp": {
       "command": "npx",
-      "args": ["@gonuts555/note-post-mcp@latest"],
+      "args": ["note-post-mcp"],
       "env": {
         "NOTE_POST_MCP_STATE_PATH": "/path/to/note-state.json"
       }
@@ -107,282 +87,237 @@ Add to your Claude Desktop configuration file (`claude_desktop_config.json`):
 }
 ```
 
-</details>
-
-<details>
-<summary>LM Studio</summary>
-
-- Command: `npx`
-- Args: `["@gonuts555/note-post-mcp@latest"]`
-- Env: `NOTE_POST_MCP_STATE_PATH=/path/to/note-state.json`
-
-</details>
-
-<details>
-<summary>Goose</summary>
-
-- Type: STDIO
-- Command: `npx`
-- Args: `@gonuts555/note-post-mcp@latest`
-- Enabled: true
-
-</details>
-
-<details>
-<summary>opencode</summary>
-
-Example `~/.config/opencode/opencode.json`:
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "note-post-mcp": {
-      "type": "local",
-      "command": ["npx", "@gonuts555/note-post-mcp@latest"],
-      "enabled": true,
-      "env": {
-        "NOTE_POST_MCP_STATE_PATH": "/path/to/note-state.json"
-      }
-    }
-  }
-}
-```
-
-</details>
-
-<details>
-<summary>Qodo Gen</summary>
-
-Add a new MCP and paste the standard JSON config from above.
-
-</details>
-
-<details>
-<summary>Windsurf</summary>
-
-Add the following to your Windsurf MCP configuration:
-
-```json
-{
-  "note-post-mcp": {
-    "command": "npx",
-    "args": ["@gonuts555/note-post-mcp@latest"],
-    "env": {
-      "NOTE_POST_MCP_STATE_PATH": "/path/to/note-state.json"
-    }
-  }
-}
-```
-
-</details>
-
-## Setup: Codex (TOML)
-
-Add the following to your Codex TOML configuration.
-
-Example (Serena):
-
-```toml
-[mcp_servers.serena]
-command = "uvx"
-args = ["--from", "git+https://github.com/oraios/serena", "serena", "start-mcp-server", "--context", "codex"]
-```
-
-This server (minimal):
-
-```toml
-[mcp_servers.note-post-mcp]
-command = "npx"
-args = ["@gonuts555/note-post-mcp@latest"]
-# Optional environment variables:
-# NOTE_POST_MCP_STATE_PATH = "/path/to/note-state.json"
-# NOTE_POST_MCP_TIMEOUT = "180000"
-# MCP_NAME = "note-post-mcp"
-```
-
-## Configuration (Env)
-
-- `NOTE_POST_MCP_STATE_PATH`: Path to the note.com authentication state file (default: `~/.note-state.json`)
-- `NOTE_POST_MCP_TIMEOUT`: Timeout in milliseconds for browser operations (default: `180000`)
-- `MCP_NAME`: Server name override (default: `note-post-mcp`)
-
-## Available Tools
+## MCPツール
 
 ### publish_note
 
-Publishes an article to note.com from a Markdown file.
+Markdownファイルからnote.comに記事を公開します。
 
-- **Inputs**:
-  - `markdown_path` (string, required): Path to the Markdown file containing title, body, and tags
-  - `thumbnail_path` (string, optional): Path to the thumbnail image file
-  - `state_path` (string, optional): Path to the note.com authentication state file
-  - `screenshot_dir` (string, optional): Directory to save screenshots
-  - `timeout` (number, optional): Timeout in milliseconds
-
-- **Outputs**: JSON object with:
-  - `success` (boolean): Whether the operation succeeded
-  - `url` (string): URL of the published article
-  - `screenshot` (string): Path to the screenshot
-  - `message` (string): Success message
+**パラメータ:**
+- `markdown_path` (string, 必須): Markdownファイルのパス
+- `thumbnail_path` (string, 任意): サムネイル画像のパス
+- `state_path` (string, 任意): 認証状態ファイルのパス
+- `price` (number, 任意): 有料記事の価格（100〜50000円）
+- `post_to_twitter` (boolean, 任意): Twitter(X)に投稿するか
+- `magazine` (string, 任意): 追加するマガジン名
+- `timeout` (number, 任意): タイムアウト（ミリ秒）
 
 ### save_draft
 
-Saves a draft article to note.com from a Markdown file.
+Markdownファイルから下書きを保存します。
 
-- **Inputs**:
-  - `markdown_path` (string, required): Path to the Markdown file containing title, body, and tags
-  - `thumbnail_path` (string, optional): Path to the thumbnail image file
-  - `state_path` (string, optional): Path to the note.com authentication state file
-  - `screenshot_dir` (string, optional): Directory to save screenshots
-  - `timeout` (number, optional): Timeout in milliseconds
+**パラメータ:**
+- `markdown_path` (string, 必須): Markdownファイルのパス
+- `thumbnail_path` (string, 任意): サムネイル画像のパス
+- `state_path` (string, 任意): 認証状態ファイルのパス
+- `timeout` (number, 任意): タイムアウト（ミリ秒）
 
-- **Outputs**: JSON object with:
-  - `success` (boolean): Whether the operation succeeded
-  - `url` (string): URL of the draft editor page
-  - `screenshot` (string): Path to the screenshot
-  - `message` (string): Success message
+## Markdownファイル形式
 
-## Markdown File Format
-
-Your Markdown file should follow this format:
+### 基本形式（無料記事）
 
 ```markdown
 ---
-title: Your Article Title
+title: 記事タイトル
 tags:
-  - tag1
-  - tag2
+  - タグ1
+  - タグ2
 ---
 
-Your article body content goes here.
-
-You can include URLs and they will be automatically expanded by note.com.
+本文をここに書きます。
 ```
 
-Alternatively, you can use array notation for tags:
+### 有料記事
 
 ```markdown
 ---
-title: Your Article Title
-tags: [tag1, tag2]
+title: 有料記事タイトル
+price: 300
+tags: [AI, 機械学習, 論文解説]
 ---
 
-Your article body content goes here.
+ここは無料部分です。
+
+<!-- paid -->
+
+ここから有料部分です。
 ```
 
-Or use a simple `#` heading for the title if no front matter is present:
+**Front Matterオプション:**
+- `title`: 記事タイトル
+- `price`: 価格（100〜50000円）。設定すると有料記事になります
+- `tags`: タグ（配列形式または`[tag1, tag2]`形式）
+- `membership`: メンバーシップ限定記事にするか（boolean）
+- `twitter`: Twitter(X)に投稿するか（boolean）
+- `magazine`: 追加するマガジン名
 
-```markdown
-# Your Article Title
+## バッチ投稿スクリプト
 
-Your article body content goes here.
+複数の記事を連続して投稿するためのスクリプトです。
+
+### 使い方
+
+```bash
+# 環境変数で設定
+export NOTE_POST_MCP_STATE_PATH="~/.note-state.json"
+export NOTE_ARTICLES_DIR="/path/to/articles"
+export NOTE_LOG_FILE="./publish_log.txt"
+
+node batch-publish.cjs [開始番号] [終了番号] [デフォルト価格]
 ```
 
-### Body Content Details
+**例:**
+```bash
+# 記事0〜10を300円で投稿
+node batch-publish.cjs 0 10 300
 
-The body content supports the following Markdown elements:
-
-**Front Matter Format:**
-- All lines after the closing `---` of the front matter are treated as body content
-- Trailing blank lines are automatically trimmed
-
-**Heading Format:**
-- The first line starting with `# ` is treated as the title (not included in the body)
-- Headings with `## ` or `### ` are treated as part of the body content
-
-**Code Blocks:**
-- Must have a closing fence (```)
-- Language specification is preserved
-- Entire code blocks are pasted as a unit
-
-**Image Insertion:**
-- Use relative paths from the Markdown file: `![description](./images/sample.png)`
-- Supports PNG, JPEG, and GIF formats
-- Local image files are automatically uploaded
-
-**Lists and Quotes:**
-- Bullet lists (`-`) and numbered lists (`1.`) are automatically continued by note.com
-- Block quotes (`>`) are also automatically continued
-- Markdown symbols are processed automatically after the first line
-
-**Horizontal Rules:**
-- `---` in the body content is correctly processed as a horizontal rule
-- Blank lines immediately following horizontal rules are automatically skipped
-
-**URL Single Lines:**
-- URLs on their own line are automatically expanded into link cards by note.com
-- YouTube and other embeds are also automatically processed
-
-## Example invocation (MCP tool call)
-
-```json
-{
-  "name": "publish_note",
-  "arguments": {
-    "markdown_path": "/path/to/article.md",
-    "thumbnail_path": "/path/to/thumbnail.png",
-    "state_path": "/path/to/note-state.json"
-  }
-}
+# 記事20〜30を500円で投稿
+node batch-publish.cjs 20 30 500
 ```
 
-For saving a draft:
+### バッチスクリプトの環境変数
 
-```json
-{
-  "name": "save_draft",
-  "arguments": {
-    "markdown_path": "/path/to/draft.md"
-  }
-}
+| 環境変数 | 説明 | デフォルト |
+|----------|------|-----------|
+| `NOTE_POST_MCP_STATE_PATH` | 認証状態ファイルのパス | `~/.note-state.json` |
+| `NOTE_ARTICLES_DIR` | 記事ディレクトリ | `./articles` |
+| `NOTE_LOG_FILE` | ログファイル | `./publish_log.txt` |
+
+### 記事ファイルの命名規則
+
+バッチスクリプトは以下の形式のファイル名を想定しています：
+
+```
+0_ファイル名.md
+1_ファイル名.md
+2_ファイル名.md
+...
 ```
 
-## Troubleshooting
+ファイル名の先頭の数字でソート・処理されます。
 
-- **Authentication errors**: Ensure your `note-state.json` file is valid and up-to-date. You may need to regenerate it if your session has expired.
-- **Ensure Node 18+**: Run `node -v` to verify your Node.js version.
-- **Build errors**: Run `npm install` and `npm run build` to ensure all dependencies are installed and TypeScript is compiled.
-- **Local runs**: After building, test locally with `npx note-post-mcp` (it will wait for MCP messages on stdin).
-- **Inspect publish artifacts**: Run `npm pack --dry-run` to see what files will be included in the published package.
-- **Timeout issues**: If operations are timing out, increase `NOTE_POST_MCP_TIMEOUT` or pass a larger `timeout` parameter.
-- **Playwright browser not installed**: Run `npm run install-browser` or `npx playwright install chromium` to install the required browser.
+### バッチ投稿の流れ
 
-## References
+1. タイトルと本文を入力
+2. 「公開に進む」をクリック
+3. タグを入力
+4. 「有料」ラベルをクリック
+5. 価格を入力
+6. 「有料エリア設定」をクリック
+7. **「このラインより先を有料にする」をクリック**（有料ラインの設定）
+8. 「投稿する」をクリック
+9. 確認モーダルのOKをクリック
 
-- [MCP SDK Documentation](https://modelcontextprotocol.io/docs/sdks)
-- [MCP Architecture](https://modelcontextprotocol.io/docs/learn/architecture)
-- [MCP Server Concepts](https://modelcontextprotocol.io/docs/learn/server-concepts)
-- [MCP Server Specification](https://modelcontextprotocol.io/specification/2025-06-18/server/index)
-- [Playwright Documentation](https://playwright.dev/)
+## 既知の制限事項
 
-## Name Consistency & Troubleshooting
+### 有料ラインの位置指定（未実装）
 
-- Always use CANONICAL_ID (`note-post-mcp`) for identifiers and keys.
-- Use CANONICAL_DISPLAY (`Note Post MCP`) only for UI labels.
-- Do not mix different names across clients.
+現在、有料ラインの位置を指定する機能は**未実装**です。
 
-### Consistency Matrix
+**現在の動作:**
+- バッチスクリプト: 記事の**先頭**に有料ラインを設定（記事全体が有料）
+- MCP: `<!-- paid -->`コメントによる位置指定を試みますが、**動作が不安定**
 
-- npm package name → `note-post-mcp`
-- Binary name → `note-post-mcp`
-- MCP server name (SDK metadata) → `note-post-mcp`
-- Env default MCP_NAME → `note-post-mcp`
-- Client registry key → `note-post-mcp`
-- UI label → `Note Post MCP`
+**今後の実装予定:**
+- Markdownファイル内の`<!-- paid -->`コメント位置を検出
+- 該当する段落の前に有料ラインを正確に設定
 
-### Conflict Cleanup
+### 有料ラインの設定について
 
-- Remove any old entries with different names and re-add with `note-post-mcp`.
-- Ensure global `.mcp.json` or client registries only use `note-post-mcp` for keys.
-- **Cursor**: Configure in the UI only. This project does not include `.cursor/mcp.json`.
+有料記事を投稿する際、note.comの「有料エリア設定」画面で有料ライン（境界線）を設定する必要があります。
 
-### Example
+- 「このラインより先を有料にする」ボタンをクリックして境界を設定
+- これをスキップすると「投稿する」ボタンが機能しません
 
-- **Correct**: `"mcpServers": { "note-post-mcp": { "command": "npx", "args": ["@gonuts555/note-post-mcp@latest"] } }`
-- **Incorrect**: Using different keys like `"NotePost"` or `"note_post"` (will conflict with `note-post-mcp`)
+### 確認モーダル
 
-## License
+「投稿する」ボタンをクリックした後、確認モーダルが表示されます。
+
+- モーダルは`[role="dialog"]`要素として表示される
+- 「OK」ボタンをクリックして投稿を完了
+- モーダルが表示されるまで最大5秒待機
+
+### レート制限
+
+連続投稿時にnote.comのレート制限に引っかかる可能性があります。
+
+- 記事間に3秒の待機時間を設定
+- 大量投稿時は10〜20記事ごとに休憩を入れることを推奨
+
+### 下書きになってしまう場合
+
+投稿が下書きになる主な原因：
+
+1. **確認モーダルをクリックできていない** - モーダルの表示待機時間を増やす
+2. **有料ラインが設定されていない** - 「このラインより先を有料にする」をクリック
+3. **セッション切れ** - `npm run login`で再認証
+
+## 環境変数
+
+- `NOTE_POST_MCP_STATE_PATH`: 認証状態ファイルのパス（デフォルト: `~/.note-state.json`）
+- `NOTE_POST_MCP_TIMEOUT`: タイムアウト（ミリ秒、デフォルト: `180000`）
+
+## ディレクトリ構造
+
+```
+note-post-mcp/
+├── src/
+│   └── index.ts          # MCPサーバーのメインコード
+├── build/                 # ビルド出力
+├── scripts/
+│   └── login.mjs         # ログインスクリプト
+├── batch-publish.cjs      # バッチ投稿スクリプト
+├── package.json
+├── tsconfig.json
+└── README.md
+```
+
+## トラブルシューティング
+
+### 認証エラー
+
+```bash
+npm run login
+```
+で認証状態ファイルを再生成してください。
+
+### ブラウザが起動しない
+
+```bash
+npm run install-browser
+# または
+npx playwright install chromium
+```
+
+### タイムアウトエラー
+
+`NOTE_POST_MCP_TIMEOUT`を増やすか、`timeout`パラメータを指定してください。
+
+### 投稿が下書きになる
+
+1. ログを確認して「確認モーダルをクリック」が出ているか確認
+2. 有料記事の場合、「有料ラインを設定」が出ているか確認
+3. セッションが切れていないか確認
+
+## 開発
+
+### ビルド
+
+```bash
+npm run build
+```
+
+### ローカルテスト
+
+```bash
+npx note-post-mcp
+```
+
+## ライセンス
 
 MIT
 
+## 謝辞
+
+- [MCP SDK](https://modelcontextprotocol.io/) - Model Context Protocol
+- [Playwright](https://playwright.dev/) - ブラウザ自動化

@@ -73,18 +73,31 @@ function extractImages(markdown: string, baseDir: string): ImageInfo[] {
   return images;
 }
 
-// Markdownファイルをパースする関数
-function parseMarkdown(content: string): {
+// パース結果の型定義
+interface ParsedMarkdown {
   title: string;
   body: string;
   tags: string[];
-} {
+  price?: number;           // 有料価格（100-50000円）
+  paidLineIndex?: number;   // 有料ラインの段落番号（0始まり）
+  magazine?: string;        // 追加するマガジン名
+  postToTwitter?: boolean;  // Twitter(X)に投稿するかどうか
+}
+
+// Markdownファイルをパースする関数
+function parseMarkdown(content: string): ParsedMarkdown {
   const lines = content.split('\n');
   let title = '';
   let body = '';
   const tags: string[] = [];
+  let price: number | undefined;
+  let paidLineIndex: number | undefined;
+  let magazine: string | undefined;
+  let postToTwitter: boolean | undefined;
   let inFrontMatter = false;
   let frontMatterEnded = false;
+  let inTagsArray = false;
+  let paragraphCount = 0;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -95,25 +108,62 @@ function parseMarkdown(content: string): {
         inFrontMatter = !inFrontMatter;
         if (!inFrontMatter) {
           frontMatterEnded = true;
+          inTagsArray = false;
         }
         continue;
       }
     }
 
     if (inFrontMatter) {
-      // タイトルとタグをfront matterから抽出
+      // タイトルをfront matterから抽出
       if (line.startsWith('title:')) {
         title = line.substring(6).trim().replace(/^["']|["']$/g, '');
-      } else if (line.startsWith('tags:')) {
+        inTagsArray = false;
+      }
+      // 価格をfront matterから抽出
+      else if (line.startsWith('price:')) {
+        const priceStr = line.substring(6).trim();
+        const parsedPrice = parseInt(priceStr, 10);
+        if (!isNaN(parsedPrice) && parsedPrice >= 100 && parsedPrice <= 50000) {
+          price = parsedPrice;
+        }
+        inTagsArray = false;
+      }
+      // マガジン名をfront matterから抽出
+      else if (line.startsWith('magazine:')) {
+        magazine = line.substring(9).trim().replace(/^["']|["']$/g, '');
+        inTagsArray = false;
+      }
+      // Twitter投稿フラグをfront matterから抽出
+      else if (line.startsWith('twitter:') || line.startsWith('x:') || line.startsWith('post_to_twitter:')) {
+        const twitterVal = line.split(':')[1].trim().toLowerCase();
+        postToTwitter = twitterVal === 'true' || twitterVal === 'yes' || twitterVal === '1';
+        inTagsArray = false;
+      }
+      // タグをfront matterから抽出
+      else if (line.startsWith('tags:')) {
         const tagsStr = line.substring(5).trim();
         if (tagsStr.startsWith('[') && tagsStr.endsWith(']')) {
           // 配列形式: tags: [tag1, tag2]
           tags.push(...tagsStr.slice(1, -1).split(',').map(t => t.trim().replace(/^["']|["']$/g, '')));
+          inTagsArray = false;
+        } else if (tagsStr === '') {
+          // 次の行からYAML配列形式
+          inTagsArray = true;
+        } else {
+          // インライン値
+          tags.push(tagsStr.replace(/^["']|["']$/g, ''));
+          inTagsArray = false;
         }
-      } else if (line.trim().startsWith('-')) {
-        // 配列形式: - tag1
+      }
+      // YAML配列形式のタグ: - tag1
+      else if (inTagsArray && line.trim().startsWith('-')) {
         const tag = line.trim().substring(1).trim().replace(/^["']|["']$/g, '');
         if (tag) tags.push(tag);
+      }
+      // 他のキーが来たら配列終了
+      else if (line.match(/^\w+:/)) {
+        inTagsArray = false;
       }
       continue;
     }
@@ -124,9 +174,19 @@ function parseMarkdown(content: string): {
       continue;
     }
 
+    // 有料ラインマーカーを検出: <!-- paid --> または <!-- 有料 -->
+    if (line.trim().match(/^<!--\s*(paid|有料)\s*-->$/i)) {
+      paidLineIndex = paragraphCount;
+      continue; // マーカー行自体は本文に含めない
+    }
+
     // 本文を追加
     if (frontMatterEnded || !line.trim().startsWith('---')) {
       body += line + '\n';
+      // 空行で段落をカウント（有料ライン位置の計算用）
+      if (line.trim() === '' && body.trim() !== '') {
+        paragraphCount++;
+      }
     }
   }
 
@@ -134,6 +194,10 @@ function parseMarkdown(content: string): {
     title: title || 'Untitled',
     body: body.trim(),
     tags: tags.filter(Boolean),
+    price,
+    paidLineIndex,
+    magazine,
+    postToTwitter,
   };
 }
 
@@ -145,11 +209,22 @@ async function postToNote(params: {
   isPublic: boolean;
   screenshotDir?: string;
   timeout?: number;
+  // 有料設定（Front Matterでも指定可能、パラメーターが優先）
+  price?: number;
+  paidLineIndex?: number;
+  // マガジン追加設定
+  magazine?: string;
+  // Twitter投稿設定
+  postToTwitter?: boolean;
 }): Promise<{
   success: boolean;
   url: string;
   screenshot?: string;
   message: string;
+  isPaid?: boolean;
+  price?: number;
+  magazine?: string;
+  postedToTwitter?: boolean;
 }> {
   const {
     markdownPath,
@@ -165,13 +240,25 @@ async function postToNote(params: {
     throw new Error(`Markdown file not found: ${markdownPath}`);
   }
   const mdContent = fs.readFileSync(markdownPath, 'utf-8');
-  const { title, body, tags } = parseMarkdown(mdContent);
-  
+  const parsed = parseMarkdown(mdContent);
+  const { title, body, tags } = parsed;
+
+  // 有料設定: パラメーターが優先、なければFront Matterから取得
+  const price = params.price ?? parsed.price;
+  const paidLineIndex = params.paidLineIndex ?? parsed.paidLineIndex;
+  const isPaid = price !== undefined && price >= 100;
+
+  // マガジン設定: パラメーターが優先、なければFront Matterから取得
+  const magazine = params.magazine ?? parsed.magazine;
+
+  // Twitter投稿設定: パラメーターが優先、なければFront Matterから取得
+  const postToTwitter = params.postToTwitter ?? parsed.postToTwitter ?? false;
+
   // 本文中の画像を抽出
   const baseDir = path.dirname(markdownPath);
   const images = extractImages(body, baseDir);
 
-  log('Parsed markdown', { title, bodyLength: body.length, tags, imageCount: images.length });
+  log('Parsed markdown', { title, bodyLength: body.length, tags, imageCount: images.length, isPaid, price, paidLineIndex, magazine, postToTwitter });
 
   // 認証状態ファイルを確認
   if (!fs.existsSync(statePath)) {
@@ -192,6 +279,7 @@ async function postToNote(params: {
       storageState: statePath,
       locale: 'ja-JP',
       permissions: ['clipboard-read', 'clipboard-write'],
+      userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     });
     const page = await context.newPage();
     page.setDefaultTimeout(timeout);
@@ -201,7 +289,7 @@ async function postToNote(params: {
 
     // 新規記事作成ページに移動
     const startUrl = 'https://editor.note.com/new';
-    await page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout });
+    await page.goto(startUrl, { waitUntil: 'networkidle', timeout });
     await page.waitForSelector('textarea[placeholder*="タイトル"]', { timeout });
 
     // サムネイル画像の設定
@@ -303,199 +391,25 @@ async function postToNote(params: {
     await page.fill('textarea[placeholder*="タイトル"]', title);
     log('Title set');
 
-    // 本文設定（行ごとに処理してURLをリンクカードに変換、画像を埋め込む）
+    // 本文設定（常に一括ペーストで高速化）
     const bodyBox = page.locator('div[contenteditable="true"][role="textbox"]').first();
     await bodyBox.waitFor({ state: 'visible' });
     await bodyBox.click();
-    
-    const lines = body.split('\n');
-    let previousLineWasList = false; // 前の行がリスト項目だったかを追跡
-    let previousLineWasQuote = false; // 前の行が引用だったかを追跡
-    let previousLineWasHorizontalRule = false; // 前の行が水平線だったかを追跡
-    
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const isLastLine = i === lines.length - 1;
-      
-      // コードブロックの開始を検出
-      if (line.trim().startsWith('```')) {
-        // コードブロック全体（```から```まで）を収集
-        const codeBlockLines: string[] = [line]; // 開始行を含める
-        let j = i + 1;
-        
-        // 終了行まで収集
-        while (j < lines.length) {
-          codeBlockLines.push(lines[j]);
-          if (lines[j].trim().startsWith('```')) {
-            break; // 終了行を含めて終了
-          }
-          j++;
-        }
-        
-        // コードブロック全体をクリップボードにコピー
-        const codeBlockContent = codeBlockLines.join('\n');
-        
-        await page.evaluate((text) => {
-          return navigator.clipboard.writeText(text);
-        }, codeBlockContent);
-        
-        await page.waitForTimeout(200);
-        
-        // ペースト
-        const isMac = process.platform === 'darwin';
-        if (isMac) {
-          await page.keyboard.press('Meta+v');
-        } else {
-          await page.keyboard.press('Control+v');
-        }
-        
-        await page.waitForTimeout(300);
-        
-        // コードブロックの後に改行（最終行でない場合）
-        if (j < lines.length - 1) {
-          await page.keyboard.press('Enter');
-        }
-        
-        // iをコードブロック終了行まで進める
-        i = j;
-        
-        // フラグをリセット
-        previousLineWasList = false;
-        previousLineWasQuote = false;
-        previousLineWasHorizontalRule = false;
-        continue;
-      }
-      
-      // 次の行が水平線かどうかをチェック
-      const nextLine = i < lines.length - 1 ? lines[i + 1] : '';
-      const nextLineIsHorizontalRule = nextLine.trim() === '---';
-      
-      // 水平線の直後の空行をスキップ
-      if (previousLineWasHorizontalRule && line.trim() === '') {
-        previousLineWasHorizontalRule = false;
-        continue; // 空行をスキップ
-      }
-      previousLineWasHorizontalRule = false;
-      
-      // 画像マークダウンを検出
-      const imageMatch = line.match(/!\[([^\]]*)\]\(([^)]+)\)/);
-      if (imageMatch) {
-        const imagePath = imageMatch[2];
-        // ローカルパスの画像をアップロード
-        if (!imagePath.startsWith('http://') && !imagePath.startsWith('https://')) {
-          const imageInfo = images.find(img => img.localPath === imagePath);
-          if (imageInfo && fs.existsSync(imageInfo.absolutePath)) {
-            log('Pasting inline image', { path: imageInfo.absolutePath });
-            
-            // 画像をクリップボードにコピーしてペーストする方法
-            // 1. 改行して新しい行を作成
-            await page.keyboard.press('Enter');
-            await page.waitForTimeout(300);
-            
-            // 2. 画像ファイルをクリップボードにコピー
-            const imageBuffer = fs.readFileSync(imageInfo.absolutePath);
-            const base64Image = imageBuffer.toString('base64');
-            const mimeType = imageInfo.absolutePath.endsWith('.png') ? 'image/png' : 
-                           imageInfo.absolutePath.endsWith('.jpg') || imageInfo.absolutePath.endsWith('.jpeg') ? 'image/jpeg' :
-                           imageInfo.absolutePath.endsWith('.gif') ? 'image/gif' : 'image/png';
-            
-            // クリップボードに画像を設定するためのJavaScriptを実行
-            await page.evaluate(async ({ base64, mime }) => {
-              const response = await fetch(`data:${mime};base64,${base64}`);
-              const blob = await response.blob();
-              const item = new ClipboardItem({ [mime]: blob });
-              await navigator.clipboard.write([item]);
-            }, { base64: base64Image, mime: mimeType });
-            
-            await page.waitForTimeout(500);
-            
-            // 3. Cmd+V (macOS) または Ctrl+V でペースト
-            const isMac = process.platform === 'darwin';
-            if (isMac) {
-              await page.keyboard.press('Meta+v');
-            } else {
-              await page.keyboard.press('Control+v');
-            }
-            
-            // ペースト完了を待つ
-            await page.waitForTimeout(2000);
-            
-            log('Inline image pasted');
-            
-            // 画像の後に改行してテキストボックスに戻る
-            if (!isLastLine) {
-              await page.keyboard.press('Enter');
-            }
-            previousLineWasList = false; // 画像の後はリストではない
-            previousLineWasQuote = false; // 画像の後は引用ではない
-            previousLineWasHorizontalRule = false; // 画像の後は水平線ではない
-            continue; // 次の行へ
-          }
-        }
-      }
-      
-      // 水平線かどうかをチェック
-      const isHorizontalRule = line.trim() === '---';
-      
-      // 現在の行がリスト項目かどうかをチェック
-      const isBulletList = /^(\s*)- /.test(line);
-      const isNumberedList = /^(\s*)\d+\.\s/.test(line);
-      const isCurrentLineList = isBulletList || isNumberedList;
-      
-      // 現在の行が引用かどうかをチェック
-      const isQuote = /^>/.test(line);
-      
-      // 通常のテキスト行を入力
-      let processedLine = line;
-      
-      // 前の行がリスト項目で、現在の行もリスト項目なら、マークダウン記号を削除
-      if (previousLineWasList && isCurrentLineList) {
-        // 箇条書きリスト: "- " または "  - " などを削除
-        // 先頭のスペース（インデント）を保持しつつ、"- " だけを削除
-        if (isBulletList) {
-          processedLine = processedLine.replace(/^(\s*)- /, '$1');
-        }
-        
-        // 番号付きリスト: "1. " または "  1. " などを削除
-        // 先頭のスペース（インデント）を保持しつつ、"数字. " だけを削除
-        if (isNumberedList) {
-          processedLine = processedLine.replace(/^(\s*)\d+\.\s/, '$1');
-        }
-      }
-      
-      // 前の行が引用で、現在の行も引用なら、マークダウン記号を削除
-      if (previousLineWasQuote && isQuote) {
-        // 引用: "> " を削除
-        processedLine = processedLine.replace(/^>\s?/, '');
-      }
-      
-      await page.keyboard.type(processedLine);
-      
-      // 次の行のために、現在の行の状態を記録
-      previousLineWasList = isCurrentLineList;
-      previousLineWasQuote = isQuote;
-      previousLineWasHorizontalRule = isHorizontalRule;
-      
-      // URL単独行の場合、追加でEnterを押してリンクカード化をトリガー
-      const isUrlLine = /^https?:\/\/[^\s]+$/.test(line.trim());
-      if (isUrlLine) {
-        await page.keyboard.press('Enter');
-        // リンクカード展開のアニメーション完了を待機
-        await page.waitForTimeout(1200);
 
-        // 次の行がある場合、キャレットがカード内に残らないよう、確実に次段落へ移動
-        if (!isLastLine) {
-          await page.keyboard.press('ArrowDown');
-          await page.waitForTimeout(150);
-        }
-      } else {
-        // URL以外の行の場合のみ、最後の行でなければ改行
-        if (!isLastLine) {
-          await page.keyboard.press('Enter');
-        }
-      }
+    log('Using fast clipboard paste');
+    await page.evaluate((text) => {
+      return navigator.clipboard.writeText(text);
+    }, body);
+    await page.waitForTimeout(50);
+
+    const isMac = process.platform === 'darwin';
+    if (isMac) {
+      await page.keyboard.press('Meta+v');
+    } else {
+      await page.keyboard.press('Control+v');
     }
-    
+    await page.waitForTimeout(300);
+
     log('Body set');
 
     // 下書き保存の場合
@@ -526,9 +440,9 @@ async function postToNote(params: {
     // 公開に進む
     const proceedBtn = page.locator('button:has-text("公開に進む")').first();
     await proceedBtn.waitFor({ state: 'visible', timeout });
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 10; i++) {
       if (await proceedBtn.isEnabled()) break;
-      await page.waitForTimeout(100);
+      await page.waitForTimeout(50);
     }
     await proceedBtn.click({ force: true });
 
@@ -550,16 +464,161 @@ async function postToNote(params: {
         await tagInput.click();
         await tagInput.fill(tag);
         await page.keyboard.press('Enter');
-        await page.waitForTimeout(120);
+        await page.waitForTimeout(50);
       }
     }
+
+    // 有料設定
+    if (isPaid && price) {
+      log('Setting paid article', { price });
+
+      try {
+        // note.comの公開設定画面では「無料」「有料」のラベルがある
+        // まず「有料」ラベルをクリックして有料モードに切り替え
+        const paidLabel = page.locator('label:has-text("有料")').first();
+        await paidLabel.waitFor({ state: 'visible', timeout: 5000 });
+        await paidLabel.click();
+        await page.waitForTimeout(200);
+
+        // 価格入力フィールドを探す（有料を選択すると表示される）
+        // note.comの価格入力は「価格」ラベルの近くにあるinput要素
+        // セレクター: 「価格」テキストを含む要素の近くのinput、または記事タイプセクション内のinput
+        await page.waitForTimeout(150);
+
+        // 「価格」ラベルの近くにあるinputを探す
+        const priceSection = page.locator('text=価格').first();
+        let priceInput = priceSection.locator('xpath=following-sibling::input | ../input | ../../input').first();
+
+        // 上記で見つからない場合、有料ラベルの後にあるinputを探す
+        if (!(await priceInput.count())) {
+          priceInput = page.locator('label:has-text("有料")').locator('xpath=following::input').first();
+        }
+
+        // さらに見つからない場合、記事タイプセクション内の全inputを探す
+        if (!(await priceInput.count())) {
+          priceInput = page.locator('input[type="text"], input[type="number"], input:not([type="checkbox"]):not([type="radio"])').nth(1);
+        }
+
+        try {
+          await priceInput.waitFor({ state: 'visible', timeout: 3000 });
+          await priceInput.fill('');
+          await priceInput.fill(String(price));
+          await page.waitForTimeout(100);
+          log('Paid settings applied', { price });
+        } catch {
+          log('Price input not found with standard selectors, trying alternative approach');
+          // フォールバック: 全ての表示されているinputを取得して、価格入力らしきものを探す
+          const allInputs = await page.locator('input:visible').all();
+          for (const inp of allInputs) {
+            const type = await inp.getAttribute('type').catch(() => '');
+            const value = await inp.inputValue().catch(() => '');
+            // 数字が入っているか、空のtext/number inputを探す
+            if ((type === 'text' || type === 'number' || type === null) && /^\d*$/.test(value)) {
+              await inp.fill('');
+              await inp.fill(String(price));
+              log('Paid settings applied via fallback', { price });
+              break;
+            }
+          }
+        }
+      } catch (e) {
+        log('Warning: Could not set paid settings, continuing as free article', { error: String(e) });
+      }
+    }
+
+    // マガジンに追加
+    let magazineAdded = false;
+    if (magazine) {
+      log('Adding to magazine', { magazine });
+
+      try {
+        // マガジンタブをクリック
+        const magazineTab = page.locator('button:has-text("マガジン")').first();
+        await magazineTab.waitFor({ state: 'visible', timeout: 5000 });
+        await magazineTab.click();
+        await page.waitForTimeout(150);
+
+        // note.comのボタンはspan要素内にテキストがある: <button><span>追加</span></button>
+        // button:has(span:has-text("追加")) セレクターを使用
+        const allAddBtns = await page.locator('button:has(span:has-text("追加"))').all();
+
+        for (const btn of allAddBtns) {
+          const isVisible = await btn.isVisible().catch(() => false);
+          if (isVisible) {
+            // ボタンの近くにマガジン名があるか確認
+            const nearbyText = await btn.locator('xpath=ancestor::*[position()<=4]').first().textContent().catch(() => '') ?? '';
+            if (nearbyText.includes(magazine)) {
+              await btn.click();
+              await page.waitForTimeout(150);
+              magazineAdded = true;
+              log('Magazine added', { magazine });
+              break;
+            }
+          }
+        }
+
+        // 見つからない場合、最後の手段として最後の追加ボタンをクリック
+        if (!magazineAdded) {
+          log('Trying last resort for magazine add');
+          const lastResortBtn = page.locator('button:has(span:has-text("追加"))').last();
+          if (await lastResortBtn.isVisible().catch(() => false)) {
+            await lastResortBtn.click();
+            await page.waitForTimeout(150);
+            magazineAdded = true;
+            log('Magazine added via last resort');
+          }
+        }
+
+        if (!magazineAdded) {
+          log('Warning: Could not find magazine', { magazine });
+        }
+      } catch (e) {
+        log('Warning: Could not add to magazine', { error: String(e), magazine });
+      }
+    }
+
+    // Twitter(X)に投稿する設定（SNSプロモーション機能）
+    let twitterEnabled = false;
+    if (postToTwitter) {
+      log('Enabling SNS promotion');
+
+      try {
+        // note.comの公開設定画面では「SNSプロモーション機能」のラジオボタンがある
+        // テキストをクリックすることでラジオボタンを選択できる
+        const snsOption = page.locator('text=SNSプロモーション機能').first();
+        try {
+          await snsOption.waitFor({ state: 'visible', timeout: 3000 });
+          await snsOption.click();
+          await page.waitForTimeout(100);
+          twitterEnabled = true;
+          log('SNS promotion enabled');
+        } catch {
+          // フォールバック: ラジオボタンを直接探す
+          const snsRadio = page.locator('input[type="radio"]').nth(1);
+          try {
+            await snsRadio.waitFor({ state: 'visible', timeout: 2000 });
+            await snsRadio.click();
+            await page.waitForTimeout(100);
+            twitterEnabled = true;
+            log('SNS promotion enabled via radio button');
+          } catch {
+            log('Warning: Could not find SNS promotion option');
+          }
+        }
+      } catch (e) {
+        log('Warning: Could not enable SNS promotion', { error: String(e) });
+      }
+    }
+
+    // 有料エリア設定は本文入力時にスラッシュコマンドで挿入済み
+    // 公開設定画面でのドラッグ操作は不要
 
     // 投稿する
     const publishBtn = page.locator('button:has-text("投稿する")').first();
     await publishBtn.waitFor({ state: 'visible', timeout });
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 30; i++) {
       if (await publishBtn.isEnabled()) break;
-      await page.waitForTimeout(100);
+      await page.waitForTimeout(200);
     }
     await publishBtn.click({ force: true });
 
@@ -572,16 +631,29 @@ async function postToNote(params: {
 
     await page.screenshot({ path: screenshotPath, fullPage: true });
     const finalUrl = page.url();
-    log('Published', { url: finalUrl });
+    log('Published', { url: finalUrl, isPaid, price, magazineAdded, twitterEnabled });
 
     await context.close();
     await browser.close();
+
+    // メッセージを構築
+    let message = isPaid ? `有料記事（${price}円）を公開しました` : '記事を公開しました';
+    if (magazineAdded) {
+      message += `（マガジン「${magazine}」に追加）`;
+    }
+    if (twitterEnabled) {
+      message += '（Twitter連携あり）';
+    }
 
     return {
       success: true,
       url: finalUrl,
       screenshot: screenshotPath,
-      message: '記事を公開しました',
+      message,
+      isPaid,
+      price: isPaid ? price : undefined,
+      magazine: magazineAdded ? magazine : undefined,
+      postedToTwitter: twitterEnabled,
     };
   } catch (error) {
     await browser.close();
@@ -596,6 +668,12 @@ const PublishNoteSchema = z.object({
   state_path: z.string().optional().describe(`note.comの認証状態ファイルのパス（デフォルト: ${DEFAULT_STATE_PATH}）`),
   screenshot_dir: z.string().optional().describe('スクリーンショット保存ディレクトリ（オプション）'),
   timeout: z.number().optional().describe(`タイムアウト（ミリ秒、デフォルト: ${DEFAULT_TIMEOUT}）`),
+  // 有料設定（Front Matterでも指定可能）
+  price: z.number().min(100).max(50000).optional().describe('有料記事の価格（100〜50000円）。Front Matterのpriceでも指定可能'),
+  // マガジン追加設定（Front Matterでも指定可能）
+  magazine: z.string().optional().describe('追加するマガジン名。Front Matterのmagazineでも指定可能'),
+  // Twitter投稿設定（Front Matterでも指定可能）
+  post_to_twitter: z.boolean().optional().describe('Twitter(X)に投稿するかどうか。Front Matterのtwitter: trueでも指定可能'),
 });
 
 const SaveDraftSchema = z.object({
@@ -610,13 +688,13 @@ const SaveDraftSchema = z.object({
 const TOOLS: Tool[] = [
   {
     name: 'publish_note',
-    description: 'note.comに記事を公開します。Markdownファイルからタイトル、本文、タグを読み取り、自動的に投稿します。',
+    description: 'note.comに記事を公開します。Markdownファイルからタイトル、本文、タグ、価格設定を読み取り、自動的に投稿します。有料記事はFront Matterのpriceで価格指定、または本文中の<!-- paid -->で有料ラインを設定できます。',
     inputSchema: {
       type: 'object',
       properties: {
         markdown_path: {
           type: 'string',
-          description: 'Markdownファイルのパス（タイトル、本文、タグを含む）',
+          description: 'Markdownファイルのパス（タイトル、本文、タグ、価格設定を含む）',
         },
         thumbnail_path: {
           type: 'string',
@@ -633,6 +711,18 @@ const TOOLS: Tool[] = [
         timeout: {
           type: 'number',
           description: `タイムアウト（ミリ秒、デフォルト: ${DEFAULT_TIMEOUT}）`,
+        },
+        price: {
+          type: 'number',
+          description: '有料記事の価格（100〜50000円）。Front Matterのpriceより優先',
+        },
+        magazine: {
+          type: 'string',
+          description: '追加するマガジン名。Front Matterのmagazineより優先',
+        },
+        post_to_twitter: {
+          type: 'boolean',
+          description: 'Twitter(X)に投稿するかどうか。Front Matterのtwitterより優先',
         },
       },
       required: ['markdown_path'],
@@ -702,6 +792,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         screenshotDir: params.screenshot_dir,
         timeout: params.timeout,
         isPublic: true,
+        price: params.price,
+        magazine: params.magazine,
+        postToTwitter: params.post_to_twitter,
       });
       return {
         content: [
