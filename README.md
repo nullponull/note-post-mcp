@@ -301,6 +301,20 @@ npx playwright install chromium
 2. 有料記事の場合、「有料ラインを設定」が出ているか確認
 3. セッションが切れていないか確認
 
+### ページ読み込みエラー（2026-01以降）
+
+note.comのUI変更により、ページ読み込みが遅くなる場合があります。
+
+**症状:**
+- `textarea[placeholder*="タイトル"]`が見つからない
+- 「投稿する」ボタンが見つからない
+
+**対処法:**
+`batch-publish.cjs`は以下の対策済みです：
+- `waitUntil: 'networkidle'` → `'domcontentloaded'` に変更
+- ページ遷移後に5秒の追加待機
+- セレクターを汎用的なもの（`textarea`）に変更
+
 ## 開発
 
 ### ビルド

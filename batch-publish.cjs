@@ -87,11 +87,14 @@ async function publishArticle(page, filePath, defaultPrice) {
   log(`  価格: ${price}円`);
 
   // 新規記事ページに移動
-  await page.goto('https://editor.note.com/new', { waitUntil: 'networkidle', timeout: 60000 });
-  await page.waitForSelector('textarea[placeholder*="タイトル"]', { timeout: 60000 });
+  await page.goto('https://editor.note.com/new', { waitUntil: 'domcontentloaded', timeout: 60000 });
+  // ページが完全に読み込まれるまで待機（SPAのため追加待機が必要）
+  await page.waitForTimeout(5000);
+  await page.waitForSelector('textarea', { timeout: 60000 });
 
   // タイトル入力
-  await page.fill('textarea[placeholder*="タイトル"]', title);
+  const titleInput = page.locator('textarea').first();
+  await titleInput.fill(title);
 
   // 本文入力
   const bodyBox = page.locator('div[contenteditable="true"][role="textbox"]').first();
@@ -219,7 +222,7 @@ async function publishArticle(page, filePath, defaultPrice) {
     '.modal button:first-of-type',
   ];
   let modalClicked = false;
-  for (let attempt = 0; attempt < 10; attempt++) { // 最大5秒待機
+  for (let attempt = 0; attempt < 20; attempt++) { // 最大10秒待機
     await page.waitForTimeout(500);
     for (const selector of okSelectors) {
       const okBtn = page.locator(selector).first();
@@ -265,7 +268,7 @@ async function publishArticle(page, filePath, defaultPrice) {
 }
 
 async function main() {
-  log(`=== October 2025 バッチ投稿開始 (${START_NUM}〜${END_NUM}) ===`);
+  log(`=== バッチ投稿開始 (${START_NUM}〜${END_NUM}) ===`);
 
   // ファイル一覧を取得してソート
   const allFiles = fs.readdirSync(ARTICLES_DIR)
@@ -321,11 +324,11 @@ async function main() {
     } catch (e) {
       failCount++;
       log(`記事${num}: 失敗 - ${e.message}`);
-      await page.screenshot({ path: `/tmp/note-error-oct-${num}.png`, fullPage: true }).catch(() => {});
+      await page.screenshot({ path: `/tmp/note-error-${num}.png`, fullPage: true }).catch(() => {});
     }
 
     // 次の記事の前に待機（レート制限回避）
-    await page.waitForTimeout(3000);
+    await page.waitForTimeout(10000);
   }
 
   await browser.close();
