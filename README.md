@@ -262,13 +262,15 @@ node batch-publish.cjs 20 30 500
 ```
 note-post-mcp/
 ├── src/
-│   └── index.ts          # MCPサーバーのメインコード
-├── build/                 # ビルド出力
+│   └── index.ts           # MCPサーバーのメインコード
+├── build/                 # ビルド出力（gitignore）
 ├── scripts/
-│   └── login.mjs         # ログインスクリプト
+│   └── login.mjs          # ログインスクリプト
 ├── batch-publish.cjs      # バッチ投稿スクリプト
 ├── package.json
+├── package-lock.json
 ├── tsconfig.json
+├── .gitignore
 └── README.md
 ```
 
