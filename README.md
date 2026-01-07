@@ -9,6 +9,7 @@ note.comへの記事投稿を自動化するMCPサーバーです。Markdownフ�
 - **MCP経由での単体投稿** - Claude等のAIアシスタントから直接記事を投稿
 - **バッチ投稿スクリプト** - 複数の記事を連続して自動投稿
 - **有料記事対応** - 価格設定と有料ラインの位置指定（`<!-- paid -->`）
+- **画像対応** - サムネイル画像と本文中の画像挿入
 - **下書き保存** - 公開せずに下書きとして保存
 - **タグ設定** - Front Matterで指定したタグを自動入力
 
@@ -162,6 +163,8 @@ Markdownファイルから下書きを保存します。
 
 ## Markdownファイル形式
 
+テンプレートファイルは [`templates/`](./templates/) ディレクトリにあります。
+
 ### 基本形式（無料記事）
 
 ```markdown
@@ -173,6 +176,10 @@ tags:
 ---
 
 本文をここに書きます。
+
+![画像の説明](./images/sample.png)
+
+画像も挿入できます。
 ```
 
 ### 有料記事
@@ -186,18 +193,51 @@ tags: [AI, 機械学習, 論文解説]
 
 ここは無料部分です。
 
+![無料部分の画像](./images/preview.png)
+
 <!-- paid -->
 
 ここから有料部分です。
+
+![有料部分の画像](./images/main.png)
 ```
 
-**Front Matterオプション:**
-- `title`: 記事タイトル
-- `price`: 価格（100〜50000円）。設定すると有料記事になります
-- `tags`: タグ（配列形式または`[tag1, tag2]`形式）
-- `membership`: メンバーシップ限定記事にするか（boolean）
-- `twitter`: Twitter(X)に投稿するか（boolean）
-- `magazine`: 追加するマガジン名
+### 画像の挿入
+
+本文中に画像を挿入するには、Markdown形式で記述します：
+
+```markdown
+![代替テキスト](./相対パス/画像.png)
+```
+
+**対応フォーマット:** PNG, JPEG, GIF, WebP
+
+**注意事項:**
+- 画像パスはMarkdownファイルからの**相対パス**で指定
+- URLの画像（`http://`、`https://`）はそのまま表示されます
+- ローカル画像は自動的にnote.comにアップロードされます
+
+### ディレクトリ構成例
+
+```
+my-article/
+├── article.md          # 記事ファイル
+├── images/
+│   ├── thumbnail.png   # サムネイル画像
+│   ├── image1.png      # 本文中の画像
+│   └── image2.jpg
+```
+
+### Front Matterオプション
+
+| オプション | 型 | 説明 |
+|-----------|-----|------|
+| `title` | string | 記事タイトル |
+| `price` | number | 価格（100〜50000円）。設定すると有料記事 |
+| `tags` | array | タグ（`- tag` 形式または `[tag1, tag2]` 形式） |
+| `twitter` | boolean | Twitter(X)に投稿するか |
+| `magazine` | string | 追加するマガジン名 |
+| `membership` | boolean | メンバーシップ限定にするか |
 
 ## バッチ投稿スクリプト
 
@@ -393,11 +433,13 @@ note-post-mcp/
 ├── build/                 # ビルド出力（gitignore）
 ├── scripts/
 │   └── login.mjs          # ログインスクリプト
+├── templates/
+│   ├── article-template.md      # 有料記事テンプレート
+│   ├── free-article-template.md # 無料記事テンプレート
+│   └── batch-article-template.md # バッチ投稿用テンプレート
 ├── batch-publish.cjs      # バッチ投稿スクリプト
 ├── package.json
-├── package-lock.json
 ├── tsconfig.json
-├── .gitignore
 └── README.md
 ```
 

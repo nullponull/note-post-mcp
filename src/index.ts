@@ -391,26 +391,86 @@ async function postToNote(params: {
     await page.fill('textarea[placeholder*="タイトル"]', title);
     log('Title set');
 
-    // 本文設定（常に一括ペーストで高速化）
+    // 本文設定
     const bodyBox = page.locator('div[contenteditable="true"][role="textbox"]').first();
     await bodyBox.waitFor({ state: 'visible' });
     await bodyBox.click();
 
-    log('Using fast clipboard paste');
-    await page.evaluate((text) => {
-      return navigator.clipboard.writeText(text);
-    }, body);
-    await page.waitForTimeout(50);
-
     const isMac = process.platform === 'darwin';
-    if (isMac) {
-      await page.keyboard.press('Meta+v');
-    } else {
-      await page.keyboard.press('Control+v');
-    }
-    await page.waitForTimeout(300);
+    const pasteKey = isMac ? 'Meta+v' : 'Control+v';
 
-    log('Body set');
+    // 画像がある場合は分割して挿入、なければ一括ペースト
+    if (images.length > 0) {
+      log('Inserting body with images', { imageCount: images.length });
+
+      // 本文を画像プレースホルダーで分割
+      let remainingBody = body;
+      for (const imageInfo of images) {
+        const parts = remainingBody.split(imageInfo.placeholder);
+        if (parts.length >= 2) {
+          // 画像の前のテキストを挿入
+          const textBefore = parts[0];
+          if (textBefore.trim()) {
+            await page.evaluate((text) => navigator.clipboard.writeText(text), textBefore);
+            await page.waitForTimeout(50);
+            await page.keyboard.press(pasteKey);
+            await page.waitForTimeout(200);
+          }
+
+          // 改行を入れる
+          await page.keyboard.press('Enter');
+          await page.waitForTimeout(100);
+
+          // 画像をクリップボードにコピーして挿入
+          try {
+            const imageBuffer = fs.readFileSync(imageInfo.absolutePath);
+            const base64Image = imageBuffer.toString('base64');
+            const ext = path.extname(imageInfo.absolutePath).toLowerCase();
+            const mimeType = ext === '.png' ? 'image/png' :
+                            ext === '.gif' ? 'image/gif' :
+                            ext === '.webp' ? 'image/webp' : 'image/jpeg';
+
+            await page.evaluate(async ({ base64, mime }) => {
+              const response = await fetch(`data:${mime};base64,${base64}`);
+              const blob = await response.blob();
+              const item = new ClipboardItem({ [mime]: blob });
+              await navigator.clipboard.write([item]);
+            }, { base64: base64Image, mime: mimeType });
+
+            await page.waitForTimeout(100);
+            await page.keyboard.press(pasteKey);
+            await page.waitForTimeout(500); // 画像アップロード待ち
+            log('Image inserted', { path: imageInfo.localPath });
+          } catch (imgErr) {
+            log('Warning: Failed to insert image', { path: imageInfo.localPath, error: String(imgErr) });
+          }
+
+          // 改行を入れる
+          await page.keyboard.press('Enter');
+          await page.waitForTimeout(100);
+
+          // 残りの本文を更新
+          remainingBody = parts.slice(1).join(imageInfo.placeholder);
+        }
+      }
+
+      // 残りのテキストを挿入
+      if (remainingBody.trim()) {
+        await page.evaluate((text) => navigator.clipboard.writeText(text), remainingBody);
+        await page.waitForTimeout(50);
+        await page.keyboard.press(pasteKey);
+        await page.waitForTimeout(200);
+      }
+    } else {
+      // 画像なしの場合は一括ペースト（高速）
+      log('Using fast clipboard paste (no images)');
+      await page.evaluate((text) => navigator.clipboard.writeText(text), body);
+      await page.waitForTimeout(50);
+      await page.keyboard.press(pasteKey);
+      await page.waitForTimeout(300);
+    }
+
+    log('Body set', { withImages: images.length > 0 });
 
     // 下書き保存の場合
     if (!isPublic) {
