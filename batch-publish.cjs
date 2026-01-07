@@ -32,6 +32,10 @@ function parseMarkdown(content) {
   let frontMatterEnded = false;
   let inTagsArray = false;
 
+  // <!-- paid --> コメントの位置を検出（段落数として）
+  let paidLinePosition = -1;
+  let paragraphCount = 0;
+
   for (const line of lines) {
     if (line.trim() === '---') {
       if (!frontMatterEnded) {
@@ -72,19 +76,31 @@ function parseMarkdown(content) {
       continue;
     }
     if (frontMatterEnded || !line.trim().startsWith('---')) {
+      // <!-- paid --> コメントの検出
+      if (line.trim() === '<!-- paid -->') {
+        paidLinePosition = paragraphCount;
+        continue; // <!-- paid --> は本文から除外
+      }
       body += line + '\n';
+      // 空行以外は段落としてカウント
+      if (line.trim()) {
+        paragraphCount++;
+      }
     }
   }
-  return { title: title || 'Untitled', body: body.trim(), tags: tags.filter(Boolean), price };
+  return { title: title || 'Untitled', body: body.trim(), tags: tags.filter(Boolean), price, paidLinePosition, totalParagraphs: paragraphCount };
 }
 
 async function publishArticle(page, filePath, defaultPrice) {
   const mdContent = fs.readFileSync(filePath, 'utf-8');
-  const { title, body, tags, price: mdPrice } = parseMarkdown(mdContent);
+  const { title, body, tags, price: mdPrice, paidLinePosition, totalParagraphs } = parseMarkdown(mdContent);
   const price = mdPrice || defaultPrice;
 
   log(`  タイトル: ${title}`);
   log(`  価格: ${price}円`);
+  if (paidLinePosition >= 0) {
+    log(`  有料ライン位置: ${paidLinePosition}段落目/${totalParagraphs}段落`);
+  }
 
   // 新規記事ページに移動
   await page.goto('https://editor.note.com/new', { waitUntil: 'domcontentloaded', timeout: 60000 });
@@ -185,12 +201,37 @@ async function publishArticle(page, filePath, defaultPrice) {
     // 有料エリア設定画面を待機
     await page.waitForTimeout(2000);
 
-    // 「このラインより先を有料にする」ボタンをクリックして有料ラインを設定
+    // 「このラインより先を有料にする」ボタンをクリックして有料ラインを挿入
     const setPaidLineBtn = page.locator('button:has-text("このラインより先を有料にする")').first();
     if (await setPaidLineBtn.isVisible().catch(() => false)) {
       await setPaidLineBtn.click({ force: true });
-      log(`  有料ラインを設定`);
-      await page.waitForTimeout(1000);
+      log(`  有料ラインを挿入`);
+      await page.waitForTimeout(1500);
+
+      // <!-- paid --> で位置指定がある場合、「ラインをこの場所に変更」ボタンで移動
+      if (paidLinePosition >= 0 && totalParagraphs > 0) {
+        const moveLineBtns = page.locator('button:has-text("ラインをこの場所に変更")');
+        const btnCount = await moveLineBtns.count();
+
+        if (btnCount > 0) {
+          // 目標位置を計算（段落位置からボタンインデックスへの変換）
+          const targetRatio = paidLinePosition / totalParagraphs;
+          let targetIndex = Math.floor(btnCount * targetRatio);
+          targetIndex = Math.max(0, Math.min(targetIndex, btnCount - 1));
+
+          log(`  有料ライン移動: ボタン${targetIndex + 1}/${btnCount} (${Math.round(targetRatio * 100)}%位置)`);
+
+          const targetBtn = moveLineBtns.nth(targetIndex);
+          await targetBtn.scrollIntoViewIfNeeded();
+          await page.waitForTimeout(300);
+
+          if (await targetBtn.isVisible().catch(() => false)) {
+            await targetBtn.click({ force: true });
+            log(`  有料ラインを移動完了`);
+            await page.waitForTimeout(1000);
+          }
+        }
+      }
     }
 
     publishBtn = page.locator('button:has-text("投稿する")').first();
