@@ -28,9 +28,18 @@ npm run build
 ```
 
 ### Playwrightブラウザのインストール
+
+**重要**: Playwrightはブラウザを別途インストールする必要があります。
+
 ```bash
+# GitHubからクローンした場合
 npm run install-browser
+
+# または直接実行
+npx playwright install chromium
 ```
+
+> **注意**: `npx note-post-mcp` でMCPサーバーとして使用する場合も、事前に上記コマンドでChromiumをインストールしてください。Playwrightのブラウザはシステムグローバルにインストールされるため、一度インストールすれば再インストールは不要です。
 
 ### 認証状態ファイルの取得
 
@@ -362,13 +371,29 @@ npm run login
 ```
 で認証状態ファイルを再生成してください。
 
-### ブラウザが起動しない
+### ブラウザが起動しない / Playwrightブラウザがインストールされていない
+
+Playwrightはブラウザを別途ダウンロードする必要があります。
 
 ```bash
-npm run install-browser
-# または
+# Chromiumをインストール
 npx playwright install chromium
+
+# システム依存関係もインストールする場合（Linux）
+npx playwright install-deps chromium
 ```
+
+**エラー例:**
+```
+Executable doesn't exist at /home/user/.cache/ms-playwright/chromium-xxx/chrome-linux/chrome
+```
+
+**解決方法:**
+1. 上記コマンドでChromiumをインストール
+2. Claude Desktopを再起動
+
+> **macOS/Windows**: 通常は `npx playwright install chromium` だけで動作します。
+> **Linux**: システムライブラリが不足している場合は `npx playwright install-deps chromium` も実行してください。
 
 ### タイムアウトエラー
 
