@@ -1,6 +1,6 @@
 {
   "name": "@gonuts555/note-post-mcp",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "MCP server for automated posting to note.com with draft/publish support",
   "type": "module",
   "main": "./build/index.js",
@@ -8,13 +8,14 @@
     "note-post-mcp": "./build/index.js"
   },
   "files": [
-    "build"
+    "build",
+    "scripts"
   ],
   "scripts": {
     "build": "tsc && chmod +x build/index.js",
     "prepare": "npm run build",
     "dev": "tsc --watch",
-    "login": "node scripts/login-note.js",
+    "login": "node scripts/login.mjs",
     "install-browser": "npx playwright install chromium"
   },
   "keywords": [
