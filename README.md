@@ -8,18 +8,37 @@ note.comへの記事投稿を自動化するMCPサーバーです。Markdownフ�
 
 - **MCP経由での単体投稿** - Claude等のAIアシスタントから直接記事を投稿
 - **バッチ投稿スクリプト** - 複数の記事を連続して自動投稿
-- **有料記事対応** - 価格設定（有料ラインの位置指定は未実装）
+- **有料記事対応** - 価格設定と有料ラインの位置指定（`<!-- paid -->`）
 - **下書き保存** - 公開せずに下書きとして保存
 - **タグ設定** - Front Matterで指定したタグを自動入力
+
+## クイックスタート
+
+```bash
+# 1. Playwrightブラウザをインストール
+npx playwright install chromium
+
+# 2. ログインして認証状態を取得
+npx note-post-mcp-login
+
+# 3. Claude Desktopの設定ファイルに追加（後述）
+```
 
 ## インストール
 
 ### 必要要件
 - Node.js 18+
 - note.comアカウント
-- 認証状態ファイル `note-state.json`（`npm run login`で取得）
+- 認証状態ファイル `note-state.json`（後述の手順で取得）
+
+### npmからインストール（推奨）
+
+```bash
+npm install -g @gonuts555/note-post-mcp
+```
 
 ### GitHubからインストール
+
 ```bash
 git clone https://github.com/nullponull/note-post-mcp.git
 cd note-post-mcp
@@ -43,13 +62,33 @@ npx playwright install chromium
 
 ### 認証状態ファイルの取得
 
-ログインスクリプトを実行してnote.comの認証状態を取得します：
+note.comの認証状態を取得するには、ログインスクリプトを実行します。
+
+#### GitHubからクローンした場合
 
 ```bash
 npm run login
 ```
 
-ブラウザが開くので、note.comにログインしてからターミナルでEnterを押してください。`~/.note-state.json`に認証状態が保存されます。
+#### npmでグローバルインストールした場合
+
+```bash
+# ログインスクリプトを実行
+npx note-post-mcp-login
+```
+
+> **注意**: 事前に `npx playwright install chromium` でブラウザをインストールしてください。
+
+#### 保存場所
+
+ブラウザが開くので、note.comにログインしてからターミナルでEnterを押してください。認証状態は以下に保存されます：
+
+| OS | パス |
+|----|------|
+| macOS/Linux | `~/.note-state.json` |
+| Windows | `%USERPROFILE%\.note-state.json` |
+
+環境変数 `NOTE_POST_MCP_STATE_PATH` で保存先を変更できます。
 
 ## MCPサーバーとして使用
 
