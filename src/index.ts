@@ -497,24 +497,24 @@ async function postToNote(params: {
       };
     }
 
-    // 公開に進む
+    // 公開に進む（長い記事の場合レンダリングに時間がかかる）
     const proceedBtn = page.locator('button:has-text("公開に進む")').first();
-    await proceedBtn.waitFor({ state: 'visible', timeout: 30000 });
-    for (let i = 0; i < 10; i++) {
+    await proceedBtn.waitFor({ state: 'visible', timeout: 60000 });
+    for (let i = 0; i < 30; i++) {
       if (await proceedBtn.isEnabled().catch(() => false)) break;
-      await page.waitForTimeout(50);
+      await page.waitForTimeout(200);
     }
     await proceedBtn.click({ force: true });
     log('Clicked proceed to publish button');
 
-    // 公開設定画面を待機
+    // 公開設定画面を待機（長い記事の場合時間がかかる）
     await Promise.race([
-      page.waitForURL(/\/publish/i, { timeout: 30000 }),
-      page.locator('button:has-text("投稿する")').first().waitFor({ state: 'visible', timeout: 30000 }),
+      page.waitForURL(/\/publish/i, { timeout: 60000 }),
+      page.locator('button:has-text("投稿する")').first().waitFor({ state: 'visible', timeout: 60000 }),
     ]).catch(() => {});
 
-    // 公開設定画面が完全に読み込まれるまで待機
-    await page.waitForTimeout(1000);
+    // 公開設定画面が完全に読み込まれるまで待機（長い記事用に延長）
+    await page.waitForTimeout(3000);
     log('Navigated to publish settings page');
 
     // タグ入力（タグがある場合のみ）
@@ -543,7 +543,7 @@ async function postToNote(params: {
         const paidLabel = page.locator('label:has-text("有料")').first();
         if (await paidLabel.isVisible().catch(() => false)) {
           await paidLabel.click();
-          await page.waitForTimeout(500); // 有料設定が反映されるまで待機
+          await page.waitForTimeout(1500); // 有料設定が反映されるまで待機（長い記事用に延長）
 
           // 価格入力欄を探す（type="text"でplaceholder="300"のもの）
           const priceInput = page.locator('input[type="text"][placeholder="300"]').first();
@@ -668,35 +668,35 @@ async function postToNote(params: {
       log('Clicking paid area settings button');
       await paidAreaBtn.click({ force: true });
 
-      // 有料エリア設定画面を待機
-      await page.waitForTimeout(2000);
+      // 有料エリア設定画面を待機（長い記事の場合レンダリングに時間がかかる）
+      await page.waitForTimeout(5000);
 
       // 「このラインより先を有料にする」ボタンをクリックして有料ラインを設定
       const setPaidLineBtn = page.locator('button:has-text("このラインより先を有料にする")').first();
       if (await setPaidLineBtn.isVisible().catch(() => false)) {
         await setPaidLineBtn.click({ force: true });
         log('Paid line set');
-        await page.waitForTimeout(1000);
+        await page.waitForTimeout(2000);
       } else {
         log('Warning: Could not find "このラインより先を有料にする" button');
       }
 
       // 投稿ボタンを再取得
       publishBtn = page.locator('button:has-text("投稿する")').first();
-      await publishBtn.waitFor({ state: 'visible', timeout: 30000 });
+      await publishBtn.waitFor({ state: 'visible', timeout: 60000 });
     } else if (isPaid) {
       // 有料を選択したがボタンが見つからない場合
       log('Warning: Paid article but paid area settings button not found');
-      await publishBtn.waitFor({ state: 'visible', timeout: 30000 });
+      await publishBtn.waitFor({ state: 'visible', timeout: 60000 });
     } else {
       // 無料記事の場合は「投稿する」ボタンを待機
-      await publishBtn.waitFor({ state: 'visible', timeout: 30000 });
+      await publishBtn.waitFor({ state: 'visible', timeout: 60000 });
     }
 
-    // 投稿する - ボタンが有効になるまで待機
-    for (let i = 0; i < 30; i++) {
+    // 投稿する - ボタンが有効になるまで待機（長い記事用に延長）
+    for (let i = 0; i < 60; i++) {
       if (await publishBtn.isEnabled().catch(() => false)) break;
-      await page.waitForTimeout(200);
+      await page.waitForTimeout(300);
     }
     await publishBtn.click({ force: true });
     log('Publish button clicked');
@@ -711,8 +711,8 @@ async function postToNote(params: {
       '.modal button:first-of-type',
     ];
     let modalClicked = false;
-    for (let attempt = 0; attempt < 10; attempt++) {
-      await page.waitForTimeout(500);
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await page.waitForTimeout(1000);
       for (const selector of okSelectors) {
         const okBtn = page.locator(selector).first();
         if (await okBtn.isVisible().catch(() => false)) {

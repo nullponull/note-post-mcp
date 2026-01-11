@@ -262,22 +262,47 @@ async function publishArticle(page, filePath, thumbnailPath) {
     await page.waitForTimeout(500);
   }
 
-  // 公開に進む
+  // 本文ペースト後、エディターが安定するまで待機（長い記事用）
+  log(`  エディターの安定を待機中...`);
+  await page.waitForTimeout(10000);
+
+  // 公開に進む（長い記事の場合レンダリングに時間がかかる）
   const proceedBtn = page.locator('button:has-text("公開に進む")').first();
-  await proceedBtn.waitFor({ state: 'visible', timeout: 30000 });
-  for (let i = 0; i < 10; i++) {
+  await proceedBtn.waitFor({ state: 'visible', timeout: 60000 });
+
+  // ボタンが有効になるまで待機
+  for (let i = 0; i < 60; i++) {
     if (await proceedBtn.isEnabled().catch(() => false)) break;
-    await page.waitForTimeout(100);
+    await page.waitForTimeout(500);
   }
+
+  // クリック前のURLを記録
+  const urlBeforeClick = page.url();
+  log(`  現在のURL: ${urlBeforeClick}`);
+
   await proceedBtn.click({ force: true });
+  log(`公開設定画面に移動中...`);
 
-  // 公開設定画面を待機
-  await Promise.race([
-    page.waitForURL(/\/publish/i, { timeout: 30000 }),
-    page.locator('button:has-text("投稿する")').first().waitFor({ state: 'visible', timeout: 30000 }),
-  ]).catch(() => {});
+  // ページ遷移を確認（URLが変わるまで待機）
+  let navigated = false;
+  for (let i = 0; i < 60; i++) {
+    const currentUrl = page.url();
+    if (currentUrl !== urlBeforeClick || currentUrl.includes('/publish')) {
+      navigated = true;
+      log(`  ページ遷移確認: ${currentUrl}`);
+      break;
+    }
+    await page.waitForTimeout(1000);
+  }
 
-  await page.waitForTimeout(1500);
+  if (!navigated) {
+    log(`  警告: ページ遷移が確認できません。再クリックを試行...`);
+    await proceedBtn.click({ force: true });
+    await page.waitForTimeout(5000);
+  }
+
+  // 公開設定画面が完全に読み込まれるまで待機
+  await page.waitForTimeout(5000);
 
   // タグ入力
   if (tags.length > 0) {
@@ -303,7 +328,7 @@ async function publishArticle(page, filePath, thumbnailPath) {
     if (await paidLabel.isVisible().catch(() => false)) {
       await paidLabel.click();
       isPaidArticle = true;
-      await page.waitForTimeout(500);
+      await page.waitForTimeout(1500); // 長い記事用に延長
 
       // 価格入力
       const priceInput = page.locator('input[type="text"][placeholder="300"]').first();
@@ -333,13 +358,13 @@ async function publishArticle(page, filePath, thumbnailPath) {
   const paidAreaBtn = page.locator('button:has-text("有料エリア設定")').first();
   let publishBtn = page.locator('button:has-text("投稿する")').first();
 
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(1000);
   if (await paidAreaBtn.isVisible().catch(() => false)) {
     log(`有料エリア設定をクリック`);
     await paidAreaBtn.click({ force: true });
 
-    // 有料エリア設定画面を待機
-    await page.waitForTimeout(2000);
+    // 有料エリア設定画面を待機（長い記事用に延長）
+    await page.waitForTimeout(5000);
 
     // 有料ラインの設定
     // note.comの有料エリア設定画面では、各段落の横に「ラインをこの場所に変更」ボタンがある
@@ -394,12 +419,12 @@ async function publishArticle(page, filePath, thumbnailPath) {
     }
 
     publishBtn = page.locator('button:has-text("投稿する")').first();
-    await publishBtn.waitFor({ state: 'visible', timeout: 30000 });
+    await publishBtn.waitFor({ state: 'visible', timeout: 60000 });
   } else if (isPaidArticle) {
     log(`警告: 有料記事だが有料エリア設定ボタンが見つかりません`);
-    await publishBtn.waitFor({ state: 'visible', timeout: 30000 });
+    await publishBtn.waitFor({ state: 'visible', timeout: 60000 });
   } else {
-    await publishBtn.waitFor({ state: 'visible', timeout: 30000 });
+    await publishBtn.waitFor({ state: 'visible', timeout: 60000 });
   }
 
   // ボタンが有効になるまで待機
