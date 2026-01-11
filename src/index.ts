@@ -512,6 +512,9 @@ async function postToNote(params: {
       page.locator('button:has-text("投稿する")').first().waitFor({ state: 'visible', timeout }).catch(() => {}),
     ]);
 
+    // 公開設定画面が完全に読み込まれるまで待機
+    await page.waitForTimeout(1000);
+
     // タグ入力
     if (tags.length > 0) {
       log('Adding tags', { tags });
@@ -528,58 +531,39 @@ async function postToNote(params: {
       }
     }
 
-    // 有料設定
+    // 有料設定（バッチ処理と同じパターン）
     if (isPaid && price) {
       log('Setting paid article', { price });
 
       try {
-        // note.comの公開設定画面では「無料」「有料」のラベルがある
-        // まず「有料」ラベルをクリックして有料モードに切り替え
+        // 「有料」ラベルをクリック
         const paidLabel = page.locator('label:has-text("有料")').first();
-        await paidLabel.waitFor({ state: 'visible', timeout: 5000 });
-        await paidLabel.click();
-        await page.waitForTimeout(200);
+        if (await paidLabel.isVisible().catch(() => false)) {
+          await paidLabel.click();
+          await page.waitForTimeout(500); // 有料設定が反映されるまで待機
 
-        // 価格入力フィールドを探す（有料を選択すると表示される）
-        // note.comの価格入力は「価格」ラベルの近くにあるinput要素
-        // セレクター: 「価格」テキストを含む要素の近くのinput、または記事タイプセクション内のinput
-        await page.waitForTimeout(150);
-
-        // 「価格」ラベルの近くにあるinputを探す
-        const priceSection = page.locator('text=価格').first();
-        let priceInput = priceSection.locator('xpath=following-sibling::input | ../input | ../../input').first();
-
-        // 上記で見つからない場合、有料ラベルの後にあるinputを探す
-        if (!(await priceInput.count())) {
-          priceInput = page.locator('label:has-text("有料")').locator('xpath=following::input').first();
-        }
-
-        // さらに見つからない場合、記事タイプセクション内の全inputを探す
-        if (!(await priceInput.count())) {
-          priceInput = page.locator('input[type="text"], input[type="number"], input:not([type="checkbox"]):not([type="radio"])').nth(1);
-        }
-
-        try {
-          await priceInput.waitFor({ state: 'visible', timeout: 3000 });
-          await priceInput.fill('');
-          await priceInput.fill(String(price));
-          await page.waitForTimeout(100);
-          log('Paid settings applied', { price });
-        } catch {
-          log('Price input not found with standard selectors, trying alternative approach');
-          // フォールバック: 全ての表示されているinputを取得して、価格入力らしきものを探す
-          const allInputs = await page.locator('input:visible').all();
-          for (const inp of allInputs) {
-            const type = await inp.getAttribute('type').catch(() => '');
-            const value = await inp.inputValue().catch(() => '');
-            // 数字が入っているか、空のtext/number inputを探す
-            if ((type === 'text' || type === 'number' || type === null) && /^\d*$/.test(value)) {
-              await inp.fill('');
-              await inp.fill(String(price));
-              log('Paid settings applied via fallback', { price });
-              break;
+          // 価格入力欄を探す（type="text"でplaceholder="300"のもの）
+          const priceInput = page.locator('input[type="text"][placeholder="300"]').first();
+          if (await priceInput.isVisible().catch(() => false)) {
+            await priceInput.fill('');
+            await priceInput.fill(String(price));
+            log('Paid settings applied', { price });
+          } else {
+            // フォールバック: 数字の値が入っているinput[type="text"]を探す
+            const textInputs = page.locator('input[type="text"]');
+            const count = await textInputs.count();
+            for (let i = 0; i < count; i++) {
+              const inp = textInputs.nth(i);
+              const val = await inp.inputValue().catch(() => '');
+              if (/^\d+$/.test(val)) {
+                await inp.fill('');
+                await inp.fill(String(price));
+                log('Paid settings applied via fallback', { price });
+                break;
+              }
             }
           }
+          await page.waitForTimeout(300); // 価格設定が反映されるまで待機
         }
       } catch (e) {
         log('Warning: Could not set paid settings, continuing as free article', { error: String(e) });
