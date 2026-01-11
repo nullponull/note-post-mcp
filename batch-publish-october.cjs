@@ -1,18 +1,14 @@
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 
-// ========== 設定 ==========
-// 環境変数または以下のデフォルト値を使用
-const STATE_PATH = process.env.NOTE_POST_MCP_STATE_PATH || path.join(os.homedir(), '.note-state.json');
-const ARTICLES_DIR = process.env.NOTE_ARTICLES_DIR || './articles';
-const LOG_FILE = process.env.NOTE_LOG_FILE || './publish_log.txt';
+const STATE_PATH = '/home/sol/.note-state.json';
+const ARTICLES_DIR = '/home/sol/allforceshp/october_2025_articles/october_2025_articles';
+const LOG_FILE = '/home/sol/allforceshp/october_2025_publish_log.txt';
 
-// コマンドライン引数
-// Usage: node batch-publish.cjs [開始番号] [終了番号] [デフォルト価格]
+// 開始番号と終了番号（コマンドライン引数で指定可能）
 const START_NUM = parseInt(process.argv[2] || '0', 10);
-const END_NUM = parseInt(process.argv[3] || '999', 10);
+const END_NUM = parseInt(process.argv[3] || '59', 10);
 const DEFAULT_PRICE = parseInt(process.argv[4] || '300', 10);
 
 function log(msg) {
@@ -123,14 +119,11 @@ async function publishArticle(page, filePath, defaultPrice) {
   }
 
   // 新規記事ページに移動
-  await page.goto('https://editor.note.com/new', { waitUntil: 'domcontentloaded', timeout: 60000 });
-  // ページが完全に読み込まれるまで待機（SPAのため追加待機が必要）
-  await page.waitForTimeout(5000);
-  await page.waitForSelector('textarea', { timeout: 60000 });
+  await page.goto('https://editor.note.com/new', { waitUntil: 'networkidle', timeout: 60000 });
+  await page.waitForSelector('textarea[placeholder*="タイトル"]', { timeout: 60000 });
 
   // タイトル入力
-  const titleInput = page.locator('textarea').first();
-  await titleInput.fill(title);
+  await page.fill('textarea[placeholder*="タイトル"]', title);
 
   // 本文入力
   const bodyBox = page.locator('div[contenteditable="true"][role="textbox"]').first();
@@ -297,7 +290,7 @@ async function publishArticle(page, filePath, defaultPrice) {
     '.modal button:first-of-type',
   ];
   let modalClicked = false;
-  for (let attempt = 0; attempt < 20; attempt++) { // 最大10秒待機
+  for (let attempt = 0; attempt < 10; attempt++) { // 最大5秒待機
     await page.waitForTimeout(500);
     for (const selector of okSelectors) {
       const okBtn = page.locator(selector).first();
@@ -343,7 +336,7 @@ async function publishArticle(page, filePath, defaultPrice) {
 }
 
 async function main() {
-  log(`=== バッチ投稿開始 (${START_NUM}〜${END_NUM}) ===`);
+  log(`=== October 2025 バッチ投稿開始 (${START_NUM}〜${END_NUM}) ===`);
 
   // ファイル一覧を取得してソート
   const allFiles = fs.readdirSync(ARTICLES_DIR)
@@ -399,11 +392,11 @@ async function main() {
     } catch (e) {
       failCount++;
       log(`記事${num}: 失敗 - ${e.message}`);
-      await page.screenshot({ path: `/tmp/note-error-${num}.png`, fullPage: true }).catch(() => {});
+      await page.screenshot({ path: `/tmp/note-error-oct-${num}.png`, fullPage: true }).catch(() => {});
     }
 
     // 次の記事の前に待機（レート制限回避）
-    await page.waitForTimeout(10000);
+    await page.waitForTimeout(3000);
   }
 
   await browser.close();
