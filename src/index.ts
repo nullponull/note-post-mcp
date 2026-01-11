@@ -499,35 +499,38 @@ async function postToNote(params: {
 
     // 公開に進む
     const proceedBtn = page.locator('button:has-text("公開に進む")').first();
-    await proceedBtn.waitFor({ state: 'visible', timeout });
+    await proceedBtn.waitFor({ state: 'visible', timeout: 30000 });
     for (let i = 0; i < 10; i++) {
-      if (await proceedBtn.isEnabled()) break;
+      if (await proceedBtn.isEnabled().catch(() => false)) break;
       await page.waitForTimeout(50);
     }
     await proceedBtn.click({ force: true });
+    log('Clicked proceed to publish button');
 
-    // 公開ページへ遷移
+    // 公開設定画面を待機
     await Promise.race([
-      page.waitForURL(/\/publish/i, { timeout }).catch(() => {}),
-      page.locator('button:has-text("投稿する")').first().waitFor({ state: 'visible', timeout }).catch(() => {}),
-    ]);
+      page.waitForURL(/\/publish/i, { timeout: 30000 }),
+      page.locator('button:has-text("投稿する")').first().waitFor({ state: 'visible', timeout: 30000 }),
+    ]).catch(() => {});
 
     // 公開設定画面が完全に読み込まれるまで待機
     await page.waitForTimeout(1000);
+    log('Navigated to publish settings page');
 
-    // タグ入力
+    // タグ入力（タグがある場合のみ）
     if (tags.length > 0) {
       log('Adding tags', { tags });
-      let tagInput = page.locator('input[placeholder*="ハッシュタグ"]');
-      if (!(await tagInput.count())) {
+      let tagInput = page.locator('input[placeholder*="ハッシュタグ"]').first();
+      if (!(await tagInput.isVisible().catch(() => false))) {
         tagInput = page.locator('input[role="combobox"]').first();
       }
-      await tagInput.waitFor({ state: 'visible', timeout });
-      for (const tag of tags) {
-        await tagInput.click();
-        await tagInput.fill(tag);
-        await page.keyboard.press('Enter');
-        await page.waitForTimeout(50);
+      if (await tagInput.isVisible().catch(() => false)) {
+        for (const tag of tags) {
+          await tagInput.click();
+          await tagInput.fill(tag);
+          await page.keyboard.press('Enter');
+          await page.waitForTimeout(50);
+        }
       }
     }
 
@@ -655,41 +658,44 @@ async function postToNote(params: {
     }
 
     // 有料記事の場合: 「有料エリア設定」→「このラインより先を有料にする」→「投稿する」の流れ
+    // 無料記事の場合: 「投稿する」のみ
+    const paidAreaBtn = page.locator('button:has-text("有料エリア設定")').first();
     let publishBtn = page.locator('button:has-text("投稿する")').first();
 
-    if (isPaid) {
-      log('Setting up paid area');
-      await page.waitForTimeout(500);
+    // 有料エリア設定ボタンが表示されているか確認（有料を選択した場合に表示される）
+    await page.waitForTimeout(500);
+    if (await paidAreaBtn.isVisible().catch(() => false)) {
+      log('Clicking paid area settings button');
+      await paidAreaBtn.click({ force: true });
 
-      const paidAreaBtn = page.locator('button:has-text("有料エリア設定")').first();
-      if (await paidAreaBtn.isVisible().catch(() => false)) {
-        log('Clicking paid area settings button');
-        await paidAreaBtn.click({ force: true });
+      // 有料エリア設定画面を待機
+      await page.waitForTimeout(2000);
 
-        // 有料エリア設定画面を待機
-        await page.waitForTimeout(2000);
-
-        // 「このラインより先を有料にする」ボタンをクリックして有料ラインを設定
-        const setPaidLineBtn = page.locator('button:has-text("このラインより先を有料にする")').first();
-        if (await setPaidLineBtn.isVisible().catch(() => false)) {
-          await setPaidLineBtn.click({ force: true });
-          log('Paid line set');
-          await page.waitForTimeout(1000);
-        } else {
-          log('Warning: Could not find "このラインより先を有料にする" button');
-        }
-
-        // 投稿ボタンを再取得
-        publishBtn = page.locator('button:has-text("投稿する")').first();
+      // 「このラインより先を有料にする」ボタンをクリックして有料ラインを設定
+      const setPaidLineBtn = page.locator('button:has-text("このラインより先を有料にする")').first();
+      if (await setPaidLineBtn.isVisible().catch(() => false)) {
+        await setPaidLineBtn.click({ force: true });
+        log('Paid line set');
+        await page.waitForTimeout(1000);
       } else {
-        log('Warning: Paid article but paid area settings button not found');
+        log('Warning: Could not find "このラインより先を有料にする" button');
       }
+
+      // 投稿ボタンを再取得
+      publishBtn = page.locator('button:has-text("投稿する")').first();
+      await publishBtn.waitFor({ state: 'visible', timeout: 30000 });
+    } else if (isPaid) {
+      // 有料を選択したがボタンが見つからない場合
+      log('Warning: Paid article but paid area settings button not found');
+      await publishBtn.waitFor({ state: 'visible', timeout: 30000 });
+    } else {
+      // 無料記事の場合は「投稿する」ボタンを待機
+      await publishBtn.waitFor({ state: 'visible', timeout: 30000 });
     }
 
-    // 投稿する
-    await publishBtn.waitFor({ state: 'visible', timeout });
+    // 投稿する - ボタンが有効になるまで待機
     for (let i = 0; i < 30; i++) {
-      if (await publishBtn.isEnabled()) break;
+      if (await publishBtn.isEnabled().catch(() => false)) break;
       await page.waitForTimeout(200);
     }
     await publishBtn.click({ force: true });
