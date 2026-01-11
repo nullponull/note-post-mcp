@@ -22,6 +22,84 @@ function log(msg) {
   fs.appendFileSync(LOG_FILE, line + '\n');
 }
 
+// 画像ディレクトリを探す
+function findImagesDir(mdFilePath) {
+  const mdDir = path.dirname(mdFilePath);
+  const mdBasename = path.basename(mdFilePath, '.md');
+  // article.mdの場合は親ディレクトリ名を使用
+  const articleDirName = mdBasename === 'article' ? path.basename(mdDir) : mdBasename;
+
+  // パターン1: 同じディレクトリ内のimagesフォルダ
+  // 例: 03_自分推し/article.md → 03_自分推し/images/
+  const imagesDir1 = path.join(mdDir, 'images');
+  if (fs.existsSync(imagesDir1)) {
+    return imagesDir1;
+  }
+
+  // パターン2: 記事名と同じ名前のディレクトリ内のimagesフォルダ
+  // 例: 03_自分推し.md → 03_自分推し/images/
+  const articleDir = path.join(mdDir, articleDirName);
+  const imagesDir2 = path.join(articleDir, 'images');
+  if (fs.existsSync(imagesDir2)) {
+    return imagesDir2;
+  }
+
+  // パターン3: 親ディレクトリ内の記事ディレクトリ/images
+  // 例: articles_for_publish/03_自分推し.md → note/03_自分推し/images/
+  const parentDir = path.dirname(mdDir);
+  const noteDir = path.join(parentDir, 'note', articleDirName);
+  const imagesDir3 = path.join(noteDir, 'images');
+  if (fs.existsSync(imagesDir3)) {
+    return imagesDir3;
+  }
+
+  // パターン4: 同じ階層のnoteディレクトリ内を検索
+  // 例: articles_for_publish/03_自分推し.md → ../note/03_自分推し/images/
+  const siblingNoteDir = path.join(mdDir, '..', 'note', articleDirName, 'images');
+  if (fs.existsSync(siblingNoteDir)) {
+    return siblingNoteDir;
+  }
+
+  return null;
+}
+
+// 画像ファイルを取得
+function getImageFiles(imagesDir) {
+  if (!imagesDir || !fs.existsSync(imagesDir)) {
+    return { thumbnail: null, contentImages: [] };
+  }
+
+  const files = fs.readdirSync(imagesDir);
+  const imageExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp'];
+
+  let thumbnail = null;
+  const contentImages = [];
+
+  for (const file of files) {
+    const ext = path.extname(file).toLowerCase();
+    if (!imageExtensions.includes(ext)) continue;
+
+    const filePath = path.join(imagesDir, file);
+    const baseName = path.basename(file, ext).toLowerCase();
+
+    if (baseName === 'thumbnail') {
+      thumbnail = filePath;
+    } else {
+      // image1, image2, ... の順序でソート
+      contentImages.push({ name: baseName, path: filePath });
+    }
+  }
+
+  // 名前順でソート（image1, image2, ...）
+  contentImages.sort((a, b) => {
+    const numA = parseInt(a.name.replace(/\D/g, ''), 10) || 0;
+    const numB = parseInt(b.name.replace(/\D/g, ''), 10) || 0;
+    return numA - numB;
+  });
+
+  return { thumbnail, contentImages: contentImages.map(img => img.path) };
+}
+
 function parseMarkdown(content) {
   const lines = content.split('\n');
   let title = '';
@@ -116,10 +194,20 @@ async function publishArticle(page, filePath, defaultPrice) {
   const { title, body, tags, price: mdPrice, hasPaidLine, paidLineParagraphIndex, paidLineSearchText } = parseMarkdown(mdContent);
   const price = mdPrice || defaultPrice;
 
+  // 画像ファイルを検索
+  const imagesDir = findImagesDir(filePath);
+  const { thumbnail, contentImages } = getImageFiles(imagesDir);
+
   log(`  タイトル: ${title}`);
   log(`  価格: ${price}円`);
   if (hasPaidLine) {
     log(`  有料ライン: あり (検索テキスト: "${paidLineSearchText}")`);
+  }
+  if (thumbnail) {
+    log(`  サムネイル: ${path.basename(thumbnail)}`);
+  }
+  if (contentImages.length > 0) {
+    log(`  本文画像: ${contentImages.length}枚`);
   }
 
   // 新規記事ページに移動
@@ -143,6 +231,53 @@ async function publishArticle(page, filePath, defaultPrice) {
   // 本文ペースト後、エディターが安定するまで待機（長い記事用）
   log(`  エディターの安定を待機中...`);
   await page.waitForTimeout(10000);
+
+  // 本文画像のアップロード（エディター画面で）
+  if (contentImages.length > 0) {
+    log(`  本文画像をアップロード中...`);
+    for (let i = 0; i < contentImages.length; i++) {
+      const imgPath = contentImages[i];
+      try {
+        // エディター末尾にフォーカスを移動
+        await bodyBox.click();
+        await page.keyboard.press('End');
+        await page.keyboard.press('Control+End');
+        await page.waitForTimeout(300);
+
+        // 改行を追加
+        await page.keyboard.press('Enter');
+        await page.keyboard.press('Enter');
+        await page.waitForTimeout(300);
+
+        // ファイル選択ダイアログを使わずに、input[type="file"]にファイルをセット
+        // note.comのエディターでは、ツールバーの画像ボタンまたはドラッグ&ドロップで画像を追加
+        // input[type="file"]を探す
+        const fileInput = page.locator('input[type="file"][accept*="image"]').first();
+        if (await fileInput.count() > 0) {
+          await fileInput.setInputFiles(imgPath);
+          log(`    画像${i + 1}をアップロード: ${path.basename(imgPath)}`);
+          await page.waitForTimeout(3000); // 画像アップロード待機
+        } else {
+          // フォールバック: ツールバーの画像ボタンをクリック
+          const imageToolBtn = page.locator('button[aria-label*="画像"]').first();
+          if (await imageToolBtn.isVisible().catch(() => false)) {
+            await imageToolBtn.click();
+            await page.waitForTimeout(500);
+            const fileInputAfterClick = page.locator('input[type="file"][accept*="image"]').first();
+            if (await fileInputAfterClick.count() > 0) {
+              await fileInputAfterClick.setInputFiles(imgPath);
+              log(`    画像${i + 1}をアップロード: ${path.basename(imgPath)}`);
+              await page.waitForTimeout(3000);
+            }
+          }
+        }
+      } catch (e) {
+        log(`    画像${i + 1}のアップロードに失敗: ${e.message}`);
+      }
+    }
+    // 画像アップロード後、安定化待機
+    await page.waitForTimeout(3000);
+  }
 
   // 公開に進む（長い記事の場合レンダリングに時間がかかる）
   const proceedBtn = page.locator('button:has-text("公開に進む")').first();
@@ -181,6 +316,59 @@ async function publishArticle(page, filePath, defaultPrice) {
 
   // 公開設定画面が完全に読み込まれるまで待機（長い記事用に延長）
   await page.waitForTimeout(5000);
+
+  // サムネイル画像のアップロード
+  if (thumbnail) {
+    log(`  サムネイル画像をアップロード中...`);
+    try {
+      // サムネイル設定エリアを探す
+      // note.comの公開設定画面では、サムネイル画像のアップロード領域がある
+      const thumbnailSelectors = [
+        'input[type="file"][accept*="image"]',
+        '[data-testid="thumbnail-upload"] input[type="file"]',
+        '.thumbnail-upload input[type="file"]',
+        'label:has-text("見出し画像") input[type="file"]',
+      ];
+
+      let thumbnailUploaded = false;
+      for (const selector of thumbnailSelectors) {
+        const fileInput = page.locator(selector).first();
+        if (await fileInput.count() > 0) {
+          try {
+            await fileInput.setInputFiles(thumbnail);
+            log(`  サムネイルをアップロード: ${path.basename(thumbnail)}`);
+            thumbnailUploaded = true;
+            await page.waitForTimeout(3000); // アップロード完了待機
+            break;
+          } catch (e) {
+            // このセレクタでは失敗、次を試す
+          }
+        }
+      }
+
+      // フォールバック: 「見出し画像を設定」ボタンを探してクリック
+      if (!thumbnailUploaded) {
+        const thumbnailBtn = page.locator('button:has-text("見出し画像"), button:has-text("画像を設定"), [aria-label*="サムネイル"], [aria-label*="見出し画像"]').first();
+        if (await thumbnailBtn.isVisible().catch(() => false)) {
+          await thumbnailBtn.click();
+          await page.waitForTimeout(1000);
+          const fileInput = page.locator('input[type="file"][accept*="image"]').first();
+          if (await fileInput.count() > 0) {
+            await fileInput.setInputFiles(thumbnail);
+            log(`  サムネイルをアップロード: ${path.basename(thumbnail)}`);
+            thumbnailUploaded = true;
+            await page.waitForTimeout(3000);
+          }
+        }
+      }
+
+      if (!thumbnailUploaded) {
+        log(`  警告: サムネイルのアップロード先が見つかりませんでした`);
+      }
+    } catch (e) {
+      log(`  サムネイルのアップロードに失敗: ${e.message}`);
+    }
+  }
 
   // タグ入力（タグがある場合のみ）
   if (tags.length > 0) {
@@ -366,19 +554,44 @@ async function publishArticle(page, filePath, defaultPrice) {
   return finalUrl;
 }
 
+// 記事ファイルを収集（フラットなmdファイルとディレクトリ構造の両方に対応）
+function collectArticleFiles(articlesDir) {
+  const entries = fs.readdirSync(articlesDir, { withFileTypes: true });
+  const articles = [];
+
+  for (const entry of entries) {
+    if (entry.isFile() && entry.name.endsWith('.md') && entry.name !== 'README.md') {
+      // フラットなmdファイル: 01_記事名.md
+      articles.push({
+        name: entry.name,
+        path: path.join(articlesDir, entry.name),
+        num: parseInt(entry.name.split('_')[0], 10)
+      });
+    } else if (entry.isDirectory()) {
+      // ディレクトリ構造: 01_記事名/article.md
+      const articlePath = path.join(articlesDir, entry.name, 'article.md');
+      if (fs.existsSync(articlePath)) {
+        articles.push({
+          name: entry.name,
+          path: articlePath,
+          num: parseInt(entry.name.split('_')[0], 10)
+        });
+      }
+    }
+  }
+
+  // 番号順でソート
+  articles.sort((a, b) => a.num - b.num);
+  return articles;
+}
+
 async function main() {
   log(`=== バッチ投稿開始 (${START_NUM}〜${END_NUM}) ===`);
 
-  // ファイル一覧を取得してソート
-  const allFiles = fs.readdirSync(ARTICLES_DIR)
-    .filter(f => f.endsWith('.md') && f !== 'README.md')
-    .sort((a, b) => {
-      const numA = parseInt(a.split('_')[0], 10);
-      const numB = parseInt(b.split('_')[0], 10);
-      return numA - numB;
-    });
+  // 記事ファイルを収集（フラットなmdファイルとディレクトリ構造の両方に対応）
+  const allArticles = collectArticleFiles(ARTICLES_DIR);
 
-  log(`総ファイル数: ${allFiles.length}`);
+  log(`総記事数: ${allArticles.length}`);
 
   const browser = await chromium.launch({
     headless: true,
@@ -400,8 +613,8 @@ async function main() {
   let failCount = 0;
   const processedNums = new Set();
 
-  for (const file of allFiles) {
-    const num = parseInt(file.split('_')[0], 10);
+  for (const article of allArticles) {
+    const num = article.num;
 
     // 範囲外はスキップ
     if (num < START_NUM || num > END_NUM) continue;
@@ -413,11 +626,10 @@ async function main() {
     }
     processedNums.add(num);
 
-    const filePath = path.join(ARTICLES_DIR, file);
-    log(`記事${num}: ${file}`);
+    log(`記事${num}: ${article.name}`);
 
     try {
-      await publishArticle(page, filePath, DEFAULT_PRICE);
+      await publishArticle(page, article.path, DEFAULT_PRICE);
       successCount++;
       log(`記事${num}: 成功`);
     } catch (e) {
