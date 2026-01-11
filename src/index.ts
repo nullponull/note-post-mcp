@@ -670,24 +670,91 @@ async function postToNote(params: {
       }
     }
 
-    // 有料エリア設定は本文入力時にスラッシュコマンドで挿入済み
-    // 公開設定画面でのドラッグ操作は不要
+    // 有料記事の場合: 「有料エリア設定」→「このラインより先を有料にする」→「投稿する」の流れ
+    let publishBtn = page.locator('button:has-text("投稿する")').first();
+
+    if (isPaid) {
+      log('Setting up paid area');
+      await page.waitForTimeout(500);
+
+      const paidAreaBtn = page.locator('button:has-text("有料エリア設定")').first();
+      if (await paidAreaBtn.isVisible().catch(() => false)) {
+        log('Clicking paid area settings button');
+        await paidAreaBtn.click({ force: true });
+
+        // 有料エリア設定画面を待機
+        await page.waitForTimeout(2000);
+
+        // 「このラインより先を有料にする」ボタンをクリックして有料ラインを設定
+        const setPaidLineBtn = page.locator('button:has-text("このラインより先を有料にする")').first();
+        if (await setPaidLineBtn.isVisible().catch(() => false)) {
+          await setPaidLineBtn.click({ force: true });
+          log('Paid line set');
+          await page.waitForTimeout(1000);
+        } else {
+          log('Warning: Could not find "このラインより先を有料にする" button');
+        }
+
+        // 投稿ボタンを再取得
+        publishBtn = page.locator('button:has-text("投稿する")').first();
+      } else {
+        log('Warning: Paid article but paid area settings button not found');
+      }
+    }
 
     // 投稿する
-    const publishBtn = page.locator('button:has-text("投稿する")').first();
     await publishBtn.waitFor({ state: 'visible', timeout });
     for (let i = 0; i < 30; i++) {
       if (await publishBtn.isEnabled()) break;
       await page.waitForTimeout(200);
     }
     await publishBtn.click({ force: true });
+    log('Publish button clicked');
+
+    // 確認モーダルの「OK」ボタンをクリック（表示される場合）
+    const okSelectors = [
+      '[role="dialog"] button:first-of-type',
+      'button:has-text("OK")',
+      'button:has-text("ok")',
+      'button:has-text("確認")',
+      'button:has-text("はい")',
+      '.modal button:first-of-type',
+    ];
+    let modalClicked = false;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      await page.waitForTimeout(500);
+      for (const selector of okSelectors) {
+        const okBtn = page.locator(selector).first();
+        if (await okBtn.isVisible().catch(() => false)) {
+          await okBtn.click({ force: true });
+          log('Confirmation modal clicked', { selector });
+          modalClicked = true;
+          break;
+        }
+      }
+      if (modalClicked) break;
+    }
 
     // 投稿完了待ち
-    await Promise.race([
-      page.waitForURL((url) => !/\/publish/i.test(url.toString()), { timeout: 20000 }).catch(() => {}),
-      page.locator('text=投稿しました').first().waitFor({ timeout: 8000 }).catch(() => {}),
-      page.waitForTimeout(5000),
-    ]);
+    let published = false;
+    for (let i = 0; i < 60; i++) {
+      const currentUrl = page.url();
+      if (!/\/publish/i.test(currentUrl)) {
+        published = true;
+        break;
+      }
+      const successText = await page.locator('text=投稿しました').first().isVisible().catch(() => false);
+      if (successText) {
+        published = true;
+        await page.waitForTimeout(2000);
+        break;
+      }
+      await page.waitForTimeout(500);
+    }
+
+    if (!published) {
+      log('Warning: Could not confirm publish completion');
+    }
 
     await page.screenshot({ path: screenshotPath, fullPage: true });
     const finalUrl = page.url();
