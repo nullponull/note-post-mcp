@@ -80,6 +80,7 @@ interface ParsedMarkdown {
   tags: string[];
   price?: number;           // 有料価格（100-50000円）
   paidLineIndex?: number;   // 有料ラインの段落番号（0始まり）
+  paidLineSearchText?: string; // 有料ラインの直前段落のテキスト（検索用）
   magazine?: string;        // 追加するマガジン名
   postToTwitter?: boolean;  // Twitter(X)に投稿するかどうか
 }
@@ -92,12 +93,17 @@ function parseMarkdown(content: string): ParsedMarkdown {
   const tags: string[] = [];
   let price: number | undefined;
   let paidLineIndex: number | undefined;
+  let paidLineSearchText: string | undefined;
   let magazine: string | undefined;
   let postToTwitter: boolean | undefined;
   let inFrontMatter = false;
   let frontMatterEnded = false;
   let inTagsArray = false;
-  let paragraphCount = 0;
+
+  // 有料ライン位置計算用（batch-publish.cjsと同じロジック）
+  let currentParagraphIndex = 0;
+  let lastLineWasEmpty = true;
+  let currentParagraphText = '';
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -175,18 +181,25 @@ function parseMarkdown(content: string): ParsedMarkdown {
     }
 
     // 有料ラインマーカーを検出: <!-- paid --> または <!-- 有料 -->
+    // 検出時に、直前の段落テキストを記録
     if (line.trim().match(/^<!--\s*(paid|有料)\s*-->$/i)) {
-      paidLineIndex = paragraphCount;
+      paidLineIndex = currentParagraphIndex;
+      paidLineSearchText = currentParagraphText.trim().substring(0, 30);
       continue; // マーカー行自体は本文に含めない
     }
 
     // 本文を追加
     if (frontMatterEnded || !line.trim().startsWith('---')) {
       body += line + '\n';
-      // 空行で段落をカウント（有料ライン位置の計算用）
-      if (line.trim() === '' && body.trim() !== '') {
-        paragraphCount++;
+
+      // 段落をカウント（空行から内容のある行に変わった時に新しい段落）
+      if (line.trim() !== '' && lastLineWasEmpty) {
+        currentParagraphIndex++;
+        currentParagraphText = line;
+      } else if (line.trim() !== '') {
+        currentParagraphText += ' ' + line;
       }
+      lastLineWasEmpty = line.trim() === '';
     }
   }
 
@@ -196,6 +209,7 @@ function parseMarkdown(content: string): ParsedMarkdown {
     tags: tags.filter(Boolean),
     price,
     paidLineIndex,
+    paidLineSearchText,
     magazine,
     postToTwitter,
   };
@@ -246,7 +260,9 @@ async function postToNote(params: {
   // 有料設定: パラメーターが優先、なければFront Matterから取得
   const price = params.price ?? parsed.price;
   const paidLineIndex = params.paidLineIndex ?? parsed.paidLineIndex;
+  const paidLineSearchText = parsed.paidLineSearchText;
   const isPaid = price !== undefined && price >= 100;
+  const hasPaidLine = paidLineIndex !== undefined && paidLineIndex > 0;
 
   // マガジン設定: パラメーターが優先、なければFront Matterから取得
   const magazine = params.magazine ?? parsed.magazine;
@@ -258,7 +274,7 @@ async function postToNote(params: {
   const baseDir = path.dirname(markdownPath);
   const images = extractImages(body, baseDir);
 
-  log('Parsed markdown', { title, bodyLength: body.length, tags, imageCount: images.length, isPaid, price, paidLineIndex, magazine, postToTwitter });
+  log('Parsed markdown', { title, bodyLength: body.length, tags, imageCount: images.length, isPaid, price, paidLineIndex, paidLineSearchText, hasPaidLine, magazine, postToTwitter });
 
   // 認証状態ファイルを確認
   if (!fs.existsSync(statePath)) {
@@ -657,7 +673,7 @@ async function postToNote(params: {
       }
     }
 
-    // 有料記事の場合: 「有料エリア設定」→「このラインより先を有料にする」→「投稿する」の流れ
+    // 有料記事の場合: 「有料エリア設定」→有料ライン位置設定→「投稿する」の流れ
     // 無料記事の場合: 「投稿する」のみ
     const paidAreaBtn = page.locator('button:has-text("有料エリア設定")').first();
     let publishBtn = page.locator('button:has-text("投稿する")').first();
@@ -671,14 +687,66 @@ async function postToNote(params: {
       // 有料エリア設定画面を待機（長い記事の場合レンダリングに時間がかかる）
       await page.waitForTimeout(5000);
 
-      // 「このラインより先を有料にする」ボタンをクリックして有料ラインを設定
-      const setPaidLineBtn = page.locator('button:has-text("このラインより先を有料にする")').first();
-      if (await setPaidLineBtn.isVisible().catch(() => false)) {
-        await setPaidLineBtn.click({ force: true });
-        log('Paid line set');
-        await page.waitForTimeout(2000);
+      // 有料ラインの位置を設定
+      // <!-- paid --> マーカーの直前の段落を検索し、「ラインをこの場所に変更」ボタンをクリック
+      if (hasPaidLine && paidLineIndex !== undefined && paidLineIndex > 0) {
+        log('Setting paid line position...', { paidLineIndex, paidLineSearchText });
+
+        // 段落要素をすべて取得
+        const paragraphs = page.locator('p');
+        const pCount = await paragraphs.count().catch(() => 0);
+        log('Paragraph count', { pCount });
+
+        // paidLineSearchTextを含む段落を検索
+        let targetParagraphIndex = -1;
+        if (paidLineSearchText && paidLineSearchText.length > 5) {
+          for (let i = 0; i < pCount; i++) {
+            try {
+              const text = await paragraphs.nth(i).textContent().catch(() => '');
+              if (text && text.includes(paidLineSearchText)) {
+                targetParagraphIndex = i;
+                log('Found paragraph containing search text', { index: i, text: text.substring(0, 50) });
+                break;
+              }
+            } catch {
+              // 無視
+            }
+          }
+        }
+
+        // 「ラインをこの場所に変更」ボタンをすべて取得
+        const changeLineButtons = page.locator('button:has-text("ラインをこの場所に変更")');
+        const btnCount = await changeLineButtons.count().catch(() => 0);
+        log('Change line buttons count', { btnCount });
+
+        // 検索で見つかった段落の直後のボタンをクリック
+        // 見つからない場合はpaidLineIndexを使用
+        const buttonIndex = targetParagraphIndex >= 0 ? targetParagraphIndex : (paidLineIndex - 1);
+
+        if (buttonIndex >= 0 && buttonIndex < btnCount) {
+          await changeLineButtons.nth(buttonIndex).click({ force: true });
+          log('Paid line set at button index', { buttonIndex });
+          await page.waitForTimeout(1000);
+        } else {
+          log('Warning: Could not find matching button', { targetIndex: buttonIndex, btnCount });
+          // フォールバック: 「このラインより先を有料にする」ボタンをクリック
+          const setPaidLineBtn = page.locator('button:has-text("このラインより先を有料にする")').first();
+          if (await setPaidLineBtn.isVisible().catch(() => false)) {
+            await setPaidLineBtn.click({ force: true });
+            log('Fallback: Used default paid line button');
+            await page.waitForTimeout(2000);
+          }
+        }
       } else {
-        log('Warning: Could not find "このラインより先を有料にする" button');
+        // 有料ラインマーカーがない場合は、デフォルトの「このラインより先を有料にする」を使用
+        const setPaidLineBtn = page.locator('button:has-text("このラインより先を有料にする")').first();
+        if (await setPaidLineBtn.isVisible().catch(() => false)) {
+          await setPaidLineBtn.click({ force: true });
+          log('Paid line set (default position)');
+          await page.waitForTimeout(2000);
+        } else {
+          log('Warning: Could not find paid line setting button');
+        }
       }
 
       // 投稿ボタンを再取得
