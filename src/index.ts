@@ -679,8 +679,21 @@ async function postToNote(params: {
     let publishBtn = page.locator('button:has-text("投稿する")').first();
 
     // 有料エリア設定ボタンが表示されているか確認（有料を選択した場合に表示される）
-    await page.waitForTimeout(500);
-    if (await paidAreaBtn.isVisible().catch(() => false)) {
+    // 有料記事の場合は確実に表示されるまで待機
+    let paidAreaBtnVisible = false;
+    if (isPaid) {
+      log('Waiting for paid area settings button...');
+      for (let i = 0; i < 20; i++) {
+        if (await paidAreaBtn.isVisible().catch(() => false)) {
+          paidAreaBtnVisible = true;
+          break;
+        }
+        await page.waitForTimeout(500);
+      }
+      log('Paid area button visibility', { paidAreaBtnVisible });
+    }
+
+    if (paidAreaBtnVisible) {
       log('Clicking paid area settings button');
       await paidAreaBtn.click({ force: true });
 
@@ -692,25 +705,39 @@ async function postToNote(params: {
       if (hasPaidLine && paidLineIndex !== undefined && paidLineIndex > 0) {
         log('Setting paid line position...', { paidLineIndex, paidLineSearchText });
 
-        // 段落要素をすべて取得
+        // 段落要素をすべて取得（batch-publish.cjsと同じロジック）
         const paragraphs = page.locator('p');
         const pCount = await paragraphs.count().catch(() => 0);
         log('Paragraph count', { pCount });
 
+        // デバッグ: 最初の20段落のテキストを出力
+        for (let i = 0; i < Math.min(pCount, 20); i++) {
+          try {
+            const text = await paragraphs.nth(i).textContent().catch(() => '');
+            log(`  p[${i}]: ${text?.substring(0, 60) || '(empty)'}`);
+          } catch {
+            // 無視
+          }
+        }
+
         // paidLineSearchTextを含む段落を検索
         let targetParagraphIndex = -1;
         if (paidLineSearchText && paidLineSearchText.length > 5) {
+          log(`Searching for text: "${paidLineSearchText}"`);
           for (let i = 0; i < pCount; i++) {
             try {
               const text = await paragraphs.nth(i).textContent().catch(() => '');
               if (text && text.includes(paidLineSearchText)) {
                 targetParagraphIndex = i;
-                log('Found paragraph containing search text', { index: i, text: text.substring(0, 50) });
+                log('Found paragraph containing search text', { index: i, text: text.substring(0, 80) });
                 break;
               }
             } catch {
               // 無視
             }
+          }
+          if (targetParagraphIndex === -1) {
+            log('WARNING: Search text not found in any paragraph');
           }
         }
 
@@ -722,8 +749,10 @@ async function postToNote(params: {
         // 検索で見つかった段落の直後のボタンをクリック
         // 見つからない場合はpaidLineIndexを使用
         const buttonIndex = targetParagraphIndex >= 0 ? targetParagraphIndex : (paidLineIndex - 1);
+        log('Button index to click', { buttonIndex, targetParagraphIndex, paidLineIndex });
 
         if (buttonIndex >= 0 && buttonIndex < btnCount) {
+          log(`Clicking button at index ${buttonIndex}...`);
           await changeLineButtons.nth(buttonIndex).click({ force: true });
           log('Paid line set at button index', { buttonIndex });
           await page.waitForTimeout(1000);
