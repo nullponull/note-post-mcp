@@ -82,6 +82,7 @@ interface ParsedMarkdown {
   paidLineIndex?: number;   // 有料ラインの段落番号（0始まり）
   paidLineSearchText?: string; // 有料ラインの直前段落のテキスト（検索用）
   magazine?: string;        // 追加するマガジン名
+  membership?: string;      // 追加するメンバーシッププラン（light, support, standard, premium, all）
   postToTwitter?: boolean;  // Twitter(X)に投稿するかどうか
 }
 
@@ -95,6 +96,7 @@ function parseMarkdown(content: string): ParsedMarkdown {
   let paidLineIndex: number | undefined;
   let paidLineSearchText: string | undefined;
   let magazine: string | undefined;
+  let membership: string | undefined;
   let postToTwitter: boolean | undefined;
   let inFrontMatter = false;
   let frontMatterEnded = false;
@@ -138,6 +140,11 @@ function parseMarkdown(content: string): ParsedMarkdown {
       // マガジン名をfront matterから抽出
       else if (line.startsWith('magazine:')) {
         magazine = line.substring(9).trim().replace(/^["']|["']$/g, '');
+        inTagsArray = false;
+      }
+      // メンバーシッププランをfront matterから抽出
+      else if (line.startsWith('membership:')) {
+        membership = line.substring(11).trim().replace(/^["']|["']$/g, '').toLowerCase();
         inTagsArray = false;
       }
       // Twitter投稿フラグをfront matterから抽出
@@ -211,6 +218,7 @@ function parseMarkdown(content: string): ParsedMarkdown {
     paidLineIndex,
     paidLineSearchText,
     magazine,
+    membership,
     postToTwitter,
   };
 }
@@ -228,6 +236,8 @@ async function postToNote(params: {
   paidLineIndex?: number;
   // マガジン追加設定
   magazine?: string;
+  // メンバーシップ追加設定
+  membership?: string;
   // Twitter投稿設定
   postToTwitter?: boolean;
 }): Promise<{
@@ -267,6 +277,9 @@ async function postToNote(params: {
   // マガジン設定: パラメーターが優先、なければFront Matterから取得
   const magazine = params.magazine ?? parsed.magazine;
 
+  // メンバーシップ設定: パラメーターが優先、なければFront Matterから取得
+  const membership = params.membership ?? parsed.membership;
+
   // Twitter投稿設定: パラメーターが優先、なければFront Matterから取得
   const postToTwitter = params.postToTwitter ?? parsed.postToTwitter ?? false;
 
@@ -274,7 +287,7 @@ async function postToNote(params: {
   const baseDir = path.dirname(markdownPath);
   const images = extractImages(body, baseDir);
 
-  log('Parsed markdown', { title, bodyLength: body.length, tags, imageCount: images.length, isPaid, price, paidLineIndex, paidLineSearchText, hasPaidLine, magazine, postToTwitter });
+  log('Parsed markdown', { title, bodyLength: body.length, tags, imageCount: images.length, isPaid, price, paidLineIndex, paidLineSearchText, hasPaidLine, magazine, membership, postToTwitter });
 
   // 認証状態ファイルを確認
   if (!fs.existsSync(statePath)) {
@@ -640,6 +653,82 @@ async function postToNote(params: {
       }
     }
 
+    // メンバーシップに追加する設定
+    if (membership) {
+      log('Adding to membership', { membership });
+      try {
+        // 「記事の追加」セクション内のメンバーシップチェックボックスをクリック
+        // UI構造: checkbox "メンバーシップ" がチェックボックスとして存在
+        const membershipCheckbox = page.getByRole('checkbox', { name: 'メンバーシップ' });
+
+        // チェックボックスが表示されるまで待機
+        await membershipCheckbox.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
+
+        if (await membershipCheckbox.isVisible().catch(() => false)) {
+          // チェックされていなければクリック
+          const isChecked = await membershipCheckbox.isChecked().catch(() => false);
+          if (!isChecked) {
+            await membershipCheckbox.click();
+            log('Clicked membership checkbox');
+            await page.waitForTimeout(1000);
+          }
+
+          // プラン名のマッピング（UIに表示される実際のテキストに合わせる）
+          const planPatterns: Record<string, string> = {
+            'light': 'ＡＩｘ副業',              // ＡＩｘ副業 読み放題プラン
+            'support': '応援プラン',            // 応援プラン
+            'standard': 'スタンダードプラン',    // スタンダードプラン｜AI副業＋限定特典
+            'premium': 'プレミアムプラン',       // プレミアムプラン｜個別相談＋全特典
+            'all': 'メンバー全員に公開'          // 全メンバー向け
+          };
+
+          const pattern = planPatterns[membership] || membership;
+          log('Looking for plan', { pattern });
+
+          // プラン名を含む要素を探し、その隣の「追加」ボタンをクリック
+          // 各プランは「プラン名」と「追加」ボタンが同じ親要素内にある
+          const planContainer = page.locator(`div:has(> div:has-text("${pattern}"))`).first();
+
+          if (await planContainer.isVisible().catch(() => false)) {
+            const addBtn = planContainer.getByRole('button', { name: '追加' });
+            if (await addBtn.isVisible().catch(() => false)) {
+              await addBtn.click();
+              log('Added to membership', { membership, pattern });
+              await page.waitForTimeout(1000);
+            } else {
+              // フォールバック: プラン名のテキストを含む行から追加ボタンを探す
+              const altAddBtn = page.locator(`div:has-text("${pattern}") >> button:has-text("追加")`).first();
+              if (await altAddBtn.isVisible().catch(() => false)) {
+                await altAddBtn.click();
+                log('Added to membership via fallback', { membership, pattern });
+                await page.waitForTimeout(1000);
+              } else {
+                log('Warning: Could not find add button for membership', { membership, pattern });
+              }
+            }
+          } else {
+            // フォールバック: getByTextを使用
+            const planText = page.getByText(pattern, { exact: false }).first();
+            if (await planText.isVisible().catch(() => false)) {
+              const parent = planText.locator('..').first();
+              const addBtn = parent.getByRole('button', { name: '追加' });
+              if (await addBtn.isVisible().catch(() => false)) {
+                await addBtn.click();
+                log('Added to membership via text search', { membership, pattern });
+                await page.waitForTimeout(1000);
+              }
+            } else {
+              log('Warning: Could not find membership plan', { membership, pattern });
+            }
+          }
+        } else {
+          log('Warning: Could not find membership checkbox');
+        }
+      } catch (e) {
+        log('Warning: Could not add to membership', { error: String(e), membership });
+      }
+    }
+
     // Twitter(X)に投稿する設定（SNSプロモーション機能）
     let twitterEnabled = false;
     if (postToTwitter) {
@@ -886,6 +975,8 @@ const PublishNoteSchema = z.object({
   price: z.number().min(100).max(50000).optional().describe('有料記事の価格（100〜50000円）。Front Matterのpriceでも指定可能'),
   // マガジン追加設定（Front Matterでも指定可能）
   magazine: z.string().optional().describe('追加するマガジン名。Front Matterのmagazineでも指定可能'),
+  // メンバーシップ追加設定（Front Matterでも指定可能）
+  membership: z.string().optional().describe('追加するメンバーシッププラン（light, support, standard, premium, all）。Front Matterのmembershipでも指定可能'),
   // Twitter投稿設定（Front Matterでも指定可能）
   post_to_twitter: z.boolean().optional().describe('Twitter(X)に投稿するかどうか。Front Matterのtwitter: trueでも指定可能'),
 });
@@ -933,6 +1024,10 @@ const TOOLS: Tool[] = [
         magazine: {
           type: 'string',
           description: '追加するマガジン名。Front Matterのmagazineより優先',
+        },
+        membership: {
+          type: 'string',
+          description: '追加するメンバーシッププラン（light, support, standard, premium, all）。Front Matterのmembershipより優先',
         },
         post_to_twitter: {
           type: 'boolean',
@@ -1008,6 +1103,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         isPublic: true,
         price: params.price,
         magazine: params.magazine,
+        membership: params.membership,
         postToTwitter: params.post_to_twitter,
       });
       return {
