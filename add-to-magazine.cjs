@@ -10,7 +10,7 @@ const LOG_FILE = './add_to_magazine_log.txt';
 // マガジン定義
 const MAGAZINES = {
   'AI論文読み放題': {
-    patterns: ['論文', '翻訳', 'Paper', 'Research']
+    patterns: ['論文', '翻訳', 'Paper', 'Research', 'GPT-SoVITS', '音声合成', 'パラメーター', '潜在空間']
   },
   '副業×AI': {
     patterns: ['副業', 'ニュース×AI', '株', '経済', '投資', 'DMM', '楽天']
@@ -30,6 +30,12 @@ const LIMIT = limitIndex !== -1 ? parseInt(args[limitIndex + 1], 10) : 0;
 
 const magazineIndex = args.indexOf('--magazine');
 const FILTER_MAGAZINE = magazineIndex !== -1 ? args[magazineIndex + 1] : null;
+
+// --force-all: パターン検出をスキップし全記事を指定マガジンに登録
+const FORCE_ALL = args.includes('--force-all');
+
+// --all: 期間フィルターをスキップし全記事を処理
+const PROCESS_ALL_PERIODS = args.includes('--all');
 
 // 数値引数を抽出
 const numArgs = args.filter(a => !a.startsWith('--') && !isNaN(parseInt(a, 10)));
@@ -77,10 +83,17 @@ async function main() {
   if (FILTER_MAGAZINE) {
     log(`対象マガジン: ${FILTER_MAGAZINE}`);
   }
-  log('============================================================');
-  log('マガジン判定ルール:');
-  log('  - 論文/翻訳/Paper/Research を含む → AI論文読み放題');
-  log('  - 副業/ニュース×AI/株/経済/投資/DMM/楽天 を含む → 副業×AI');
+  if (PROCESS_ALL_PERIODS) {
+    log('全期間モード: 期間フィルターをスキップ');
+  }
+  if (FORCE_ALL) {
+    log(`強制モード: 全記事を「${FILTER_MAGAZINE || 'AI論文読み放題'}」に登録`);
+  } else {
+    log('============================================================');
+    log('マガジン判定ルール:');
+    log('  - 論文/翻訳/Paper/Research を含む → AI論文読み放題');
+    log('  - 副業/ニュース×AI/株/経済/投資/DMM/楽天 を含む → 副業×AI');
+  }
   log('============================================================');
 
   // 認証状態を読み込み
@@ -93,8 +106,8 @@ async function main() {
   const state = JSON.parse(fs.readFileSync(STATE_PATH, 'utf-8'));
 
   const browser = await chromium.launch({
-    headless: false,
-    slowMo: 100
+    headless: true,
+    slowMo: 50
   });
 
   const context = await browser.newContext({
@@ -120,41 +133,46 @@ async function main() {
     log('ログイン確認OK');
 
     // Step 1: 「期間」フィルターをクリック
-    log('期間フィルターを探索中...');
+    // 期間フィルター処理（--all オプションの場合はスキップ）
+    if (!PROCESS_ALL_PERIODS) {
+      log('期間フィルターを探索中...');
 
-    const periodButton = await page.$('button:has-text("期間")') ||
-                         await page.$('[data-testid*="period"]') ||
-                         await page.$('.filter-period') ||
-                         await page.$('text=期間');
+      const periodButton = await page.$('button:has-text("期間")') ||
+                           await page.$('[data-testid*="period"]') ||
+                           await page.$('.filter-period') ||
+                           await page.$('text=期間');
 
-    if (periodButton) {
-      log('期間フィルターボタンを発見、クリック...');
-      await periodButton.click();
-      await page.waitForTimeout(1000);
+      if (periodButton) {
+        log('期間フィルターボタンを発見、クリック...');
+        await periodButton.click();
+        await page.waitForTimeout(1000);
+      } else {
+        log('期間フィルターボタンが見つかりません');
+      }
+
+      // Step 2: 年月を選択
+      log(`${YEAR}年${MONTH}月を選択中...`);
+
+      const yearSelector = await page.$(`text=${YEAR}年`) ||
+                           await page.$(`option:has-text("${YEAR}")`) ||
+                           await page.$(`[value="${YEAR}"]`);
+      if (yearSelector) {
+        await yearSelector.click();
+        await page.waitForTimeout(500);
+      }
+
+      const monthSelector = await page.$(`text=${MONTH}月`) ||
+                            await page.$(`option:has-text("${MONTH}月")`) ||
+                            await page.$(`[value="${MONTH}"]`);
+      if (monthSelector) {
+        await monthSelector.click();
+        await page.waitForTimeout(500);
+      }
+
+      await page.waitForTimeout(2000);
     } else {
-      log('期間フィルターボタンが見つかりません');
+      log('期間フィルターをスキップ（全期間モード）');
     }
-
-    // Step 2: 年月を選択
-    log(`${YEAR}年${MONTH}月を選択中...`);
-
-    const yearSelector = await page.$(`text=${YEAR}年`) ||
-                         await page.$(`option:has-text("${YEAR}")`) ||
-                         await page.$(`[value="${YEAR}"]`);
-    if (yearSelector) {
-      await yearSelector.click();
-      await page.waitForTimeout(500);
-    }
-
-    const monthSelector = await page.$(`text=${MONTH}月`) ||
-                          await page.$(`option:has-text("${MONTH}月")`) ||
-                          await page.$(`[value="${MONTH}"]`);
-    if (monthSelector) {
-      await monthSelector.click();
-      await page.waitForTimeout(500);
-    }
-
-    await page.waitForTimeout(2000);
 
     // Step 3: 記事リストを取得
     log('記事リストを取得中...');
@@ -210,7 +228,10 @@ async function main() {
         log(`  タイトル: ${title.substring(0, 60)}...`);
 
         // タイトルから適切なマガジンを判定
-        const targetMagazine = determineTargetMagazine(title);
+        // FORCE_ALLモードの場合はパターン検出をスキップ
+        const targetMagazine = FORCE_ALL
+          ? (FILTER_MAGAZINE || 'AI論文読み放題')
+          : determineTargetMagazine(title);
 
         if (!targetMagazine) {
           log('  → マガジン対象外（パターン不一致）');
@@ -218,8 +239,8 @@ async function main() {
           continue;
         }
 
-        // 特定のマガジンのみを処理する場合のフィルタ
-        if (FILTER_MAGAZINE && targetMagazine !== FILTER_MAGAZINE) {
+        // 特定のマガジンのみを処理する場合のフィルタ（FORCE_ALLでない場合のみ）
+        if (!FORCE_ALL && FILTER_MAGAZINE && targetMagazine !== FILTER_MAGAZINE) {
           log(`  → スキップ（対象マガジン: ${FILTER_MAGAZINE}、この記事: ${targetMagazine}）`);
           skipped++;
           continue;
