@@ -655,7 +655,9 @@ async function postToNote(params: {
 
     // メンバーシップに追加する設定
     if (membership) {
-      log('Adding to membership', { membership });
+      // "true" が来た場合は "all"（メンバー全員に公開）にマップ
+      const resolvedMembership = (membership === 'true' || membership === true as any) ? 'all' : membership;
+      log('Adding to membership', { membership, resolvedMembership });
       try {
         // 「記事の追加」セクション内のメンバーシップチェックボックスをクリック
         // UI構造: checkbox "メンバーシップ" がチェックボックスとして存在
@@ -674,16 +676,22 @@ async function postToNote(params: {
           }
 
           // プラン名のマッピング（UIに表示される実際のテキストに合わせる）
+          // 2026-02-11 確認済みのUI表示:
+          //   メンバー全員に公開
+          //   ライトプラン｜AI活用 読み放題プラン
+          //   AI論文プラン
+          //   スタンダードプラン｜AI活用＋限定特典
+          //   プレミアムプラン｜個別相談＋全特典
           const planPatterns: Record<string, string> = {
-            'light': 'ＡＩｘ副業',              // ＡＩｘ副業 読み放題プラン
-            'support': '応援プラン',            // 応援プラン
-            'standard': 'スタンダードプラン',    // スタンダードプラン｜AI副業＋限定特典
-            'premium': 'プレミアムプラン',       // プレミアムプラン｜個別相談＋全特典
-            'all': 'メンバー全員に公開'          // 全メンバー向け
+            'light': 'ライトプラン',              // ライトプラン｜AI活用 読み放題プラン
+            'paper': 'AI論文プラン',              // AI論文プラン
+            'standard': 'スタンダードプラン',      // スタンダードプラン｜AI活用＋限定特典
+            'premium': 'プレミアムプラン',         // プレミアムプラン｜個別相談＋全特典
+            'all': 'メンバー全員に公開'            // 全メンバー向け
           };
 
-          const pattern = planPatterns[membership] || membership;
-          log('Looking for plan', { pattern });
+          const pattern = planPatterns[resolvedMembership] || resolvedMembership;
+          log('Looking for plan', { pattern, resolvedMembership });
 
           // プラン名を含む要素を探し、その隣の「追加」ボタンをクリック
           // 各プランは「プラン名」と「追加」ボタンが同じ親要素内にある
@@ -693,17 +701,17 @@ async function postToNote(params: {
             const addBtn = planContainer.getByRole('button', { name: '追加' });
             if (await addBtn.isVisible().catch(() => false)) {
               await addBtn.click();
-              log('Added to membership', { membership, pattern });
+              log('Added to membership', { resolvedMembership, pattern });
               await page.waitForTimeout(1000);
             } else {
               // フォールバック: プラン名のテキストを含む行から追加ボタンを探す
               const altAddBtn = page.locator(`div:has-text("${pattern}") >> button:has-text("追加")`).first();
               if (await altAddBtn.isVisible().catch(() => false)) {
                 await altAddBtn.click();
-                log('Added to membership via fallback', { membership, pattern });
+                log('Added to membership via fallback', { resolvedMembership, pattern });
                 await page.waitForTimeout(1000);
               } else {
-                log('Warning: Could not find add button for membership', { membership, pattern });
+                log('Warning: Could not find add button for membership', { resolvedMembership, pattern });
               }
             }
           } else {
@@ -714,11 +722,11 @@ async function postToNote(params: {
               const addBtn = parent.getByRole('button', { name: '追加' });
               if (await addBtn.isVisible().catch(() => false)) {
                 await addBtn.click();
-                log('Added to membership via text search', { membership, pattern });
+                log('Added to membership via text search', { resolvedMembership, pattern });
                 await page.waitForTimeout(1000);
               }
             } else {
-              log('Warning: Could not find membership plan', { membership, pattern });
+              log('Warning: Could not find membership plan', { resolvedMembership, pattern });
             }
           }
         } else {

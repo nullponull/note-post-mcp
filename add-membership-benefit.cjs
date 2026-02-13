@@ -6,25 +6,60 @@ const os = require('os');
 // ========== 設定 ==========
 const STATE_PATH = process.env.NOTE_POST_MCP_STATE_PATH || path.join(os.homedir(), '.note-state.json');
 const LOG_FILE = './membership_benefit_log.txt';
+const PROGRESS_FILE = './membership_progress.json';
 
-// コマンドライン引数
-// Usage: node add-membership-benefit.cjs [year] [month] [--dry-run] [--limit N]
-// 例: node add-membership-benefit.cjs 2026 1
-// 例: node add-membership-benefit.cjs 2026 1 --dry-run
-// 例: node add-membership-benefit.cjs 2026 1 --limit 10
+// 記事データソース
+const ARTICLES_JSON = path.resolve(__dirname, '../allforceshp/note-article-classified.json');
+
+// プラン名マッピング（note.com UI上の表示テキスト）
+// 2026-02-11 確認済みのUI表示:
+//   メンバー全員に公開
+//   ライトプラン｜AI活用 読み放題プラン
+//   AI論文プラン
+//   スタンダードプラン｜AI活用＋限定特典
+//   プレミアムプラン｜個別相談＋全特典
+const PLAN_PATTERNS = {
+  'light': 'ライトプラン',
+  'paper': 'AI論文プラン',
+  'standard': 'スタンダードプラン',
+  'premium': 'プレミアムプラン',
+  'all': 'メンバー全員に公開'
+};
+
+// ========== CLI引数 ==========
+// Usage:
+//   node add-membership-benefit.cjs --plan light,paper,standard,premium [--dry-run] [--limit N] [--resume]
+//   node add-membership-benefit.cjs --plan light --after 2026-01-18
+//   node add-membership-benefit.cjs --debug-first
+//
+// --plan: カンマ区切りで複数プラン指定可。1回の訪問でまとめて追加。
+// --after/--before: 日付フィルタ
+// --resume: 前回の続きから（completed URLをスキップ）
+// --debug-first: 1記事だけ処理してスクリーンショット確認
+// --headless: ヘッドレスモード
+
 const args = process.argv.slice(2);
-const DRY_RUN = args.includes('--dry-run');
-const limitIndex = args.indexOf('--limit');
-const LIMIT = limitIndex !== -1 ? parseInt(args[limitIndex + 1], 10) : 0; // 0 = no limit
 
-// 数値引数を抽出
-const numArgs = args.filter(a => !a.startsWith('--') && !isNaN(parseInt(a, 10)));
-const YEAR = numArgs[0] ? parseInt(numArgs[0], 10) : new Date().getFullYear();
-const MONTH = numArgs[1] ? parseInt(numArgs[1], 10) : new Date().getMonth() + 1;
+function getArg(name) {
+  const idx = args.indexOf(`--${name}`);
+  if (idx === -1) return null;
+  return args[idx + 1] || null;
+}
+function hasFlag(name) {
+  return args.includes(`--${name}`);
+}
 
-// メンバーシップ名（部分一致で検索）
-const MEMBERSHIP_NAME = 'AIｘ副業';
+const PLAN_ARG = getArg('plan');
+const AFTER_DATE = getArg('after');
+const BEFORE_DATE = getArg('before');
+const DRY_RUN = hasFlag('dry-run');
+const LIMIT = getArg('limit') ? parseInt(getArg('limit'), 10) : 0;
+const RESUME = hasFlag('resume');
+const DEBUG_FIRST = hasFlag('debug-first');
+const HEADLESS = hasFlag('headless');
+const INCLUDE_FREE = hasFlag('include-free');
 
+// ========== ログ ==========
 function log(msg) {
   const timestamp = new Date().toISOString();
   const line = `[${timestamp}] ${msg}`;
@@ -32,412 +67,395 @@ function log(msg) {
   fs.appendFileSync(LOG_FILE, line + '\n');
 }
 
-async function main() {
-  log('============================================================');
-  log('メンバーシップ特典追加スクリプト開始');
-  log(`対象期間: ${YEAR}年${MONTH}月`);
-  log(`ドライラン: ${DRY_RUN}`);
-  log(`処理上限: ${LIMIT || '無制限'}`);
-  log('============================================================');
+// ========== 日付パース ==========
+function parseArticleDate(dateStr) {
+  const m = dateStr.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/);
+  if (!m) return null;
+  return new Date(parseInt(m[1]), parseInt(m[2]) - 1, parseInt(m[3]));
+}
 
-  // 認証状態を読み込み
-  if (!fs.existsSync(STATE_PATH)) {
-    log(`エラー: 認証状態ファイルが見つかりません: ${STATE_PATH}`);
-    log('先にnote-post MCPでログインしてください');
+function parseISODate(str) {
+  const parts = str.split('-');
+  return new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+}
+
+// ========== 進捗管理 ==========
+function loadProgress() {
+  if (fs.existsSync(PROGRESS_FILE)) {
+    return JSON.parse(fs.readFileSync(PROGRESS_FILE, 'utf-8'));
+  }
+  return { completed: [], failed: [] };
+}
+
+function saveProgress(progress) {
+  fs.writeFileSync(PROGRESS_FILE, JSON.stringify(progress, null, 2));
+}
+
+// ========== ブラウザ管理 ==========
+let browser = null;
+let context = null;
+let page = null;
+
+async function launchBrowser() {
+  const state = JSON.parse(fs.readFileSync(STATE_PATH, 'utf-8'));
+  browser = await chromium.launch({ headless: HEADLESS, slowMo: 50 });
+  context = await browser.newContext({ storageState: state, viewport: { width: 1280, height: 900 } });
+  page = await context.newPage();
+  return page;
+}
+
+async function restartBrowser() {
+  log('ブラウザを再起動中...');
+  try { await browser.close(); } catch {}
+  await new Promise(r => setTimeout(r, 2000));
+  await launchBrowser();
+  // ログイン確認
+  await page.goto('https://note.com/dashboard', { waitUntil: 'networkidle', timeout: 30000 });
+  await page.waitForTimeout(2000);
+  if (page.url().includes('login')) {
+    throw new Error('再起動後もログインが必要です');
+  }
+  log('ブラウザ再起動完了');
+}
+
+// ========== メイン ==========
+async function main() {
+  // プラン解析（カンマ区切り対応）
+  if (!PLAN_ARG && !DEBUG_FIRST) {
+    console.error('エラー: --plan が必要です');
+    console.error('Usage: node add-membership-benefit.cjs --plan light,paper,standard,premium');
     process.exit(1);
   }
 
-  const state = JSON.parse(fs.readFileSync(STATE_PATH, 'utf-8'));
-
-  const browser = await chromium.launch({
-    headless: false,  // デバッグ用に表示
-    slowMo: 100       // 操作を見やすく
-  });
-
-  const context = await browser.newContext({
-    storageState: state,
-    viewport: { width: 1280, height: 900 }
-  });
-
-  const page = await context.newPage();
-
-  try {
-    // 記事一覧ページに移動
-    log('記事一覧ページに移動中...');
-    await page.goto('https://note.com/notes', { waitUntil: 'networkidle' });
-    await page.waitForTimeout(2000);
-
-    // ログイン確認
-    const loginBtn = await page.$('a[href*="login"]');
-    if (loginBtn) {
-      log('エラー: ログインが必要です');
-      await browser.close();
+  const planNames = (PLAN_ARG || 'light').split(',').map(s => s.trim());
+  const planEntries = [];
+  for (const name of planNames) {
+    const pattern = PLAN_PATTERNS[name];
+    if (!pattern) {
+      console.error(`エラー: 不明なプラン "${name}". 有効: ${Object.keys(PLAN_PATTERNS).join(', ')}`);
       process.exit(1);
     }
-    log('ログイン確認OK');
+    planEntries.push({ name, pattern });
+  }
 
-    // Step 1: 「期間」フィルターをクリック
-    log('期間フィルターを探索中...');
+  // 記事データ読み込み
+  if (!fs.existsSync(ARTICLES_JSON)) {
+    log(`エラー: 記事データが見つかりません: ${ARTICLES_JSON}`);
+    process.exit(1);
+  }
+  const allArticles = JSON.parse(fs.readFileSync(ARTICLES_JSON, 'utf-8'));
 
-    // 期間フィルターボタンを探す
-    const periodButton = await page.$('button:has-text("期間")') ||
-                         await page.$('[data-testid*="period"]') ||
-                         await page.$('.filter-period') ||
-                         await page.$('text=期間');
+  // フィルタリング
+  let filtered = allArticles.filter(a => {
+    if (!INCLUDE_FREE && (a.price === '無料' || a.price === '¥0')) return false;
+    const dt = parseArticleDate(a.date || '');
+    if (!dt) return false;
+    if (AFTER_DATE && dt < parseISODate(AFTER_DATE)) return false;
+    if (BEFORE_DATE && dt >= parseISODate(BEFORE_DATE)) return false;
+    return true;
+  });
 
-    if (periodButton) {
-      log('期間フィルターボタンを発見、クリック...');
-      await periodButton.click();
-      await page.waitForTimeout(1000);
-    } else {
-      log('期間フィルターボタンが見つかりません。ページ構造を調査します...');
+  // レジューム
+  const progress = RESUME ? loadProgress() : { completed: [], failed: [] };
+  const completedSet = new Set(progress.completed);
+  if (RESUME) {
+    const before = filtered.length;
+    filtered = filtered.filter(a => !completedSet.has(a.url));
+    log(`レジューム: ${before - filtered.length}件の処理済みをスキップ`);
+  }
 
-      // ページ構造をデバッグ出力
-      const buttons = await page.$$('button');
-      log(`ボタン数: ${buttons.length}`);
-      for (let i = 0; i < Math.min(buttons.length, 10); i++) {
-        const text = await buttons[i].textContent();
-        log(`  Button ${i}: "${text?.substring(0, 50)}"`);
+  if (LIMIT > 0) filtered = filtered.slice(0, LIMIT);
+  if (DEBUG_FIRST) filtered = filtered.slice(0, 1);
+
+  log('============================================================');
+  log('メンバーシップ特典追加スクリプト v3 (複数プラン一括対応)');
+  log(`プラン: ${planEntries.map(p => `${p.name}(${p.pattern})`).join(', ')}`);
+  log(`日付フィルタ: ${AFTER_DATE ? 'after ' + AFTER_DATE : ''} ${BEFORE_DATE ? 'before ' + BEFORE_DATE : ''} ${!AFTER_DATE && !BEFORE_DATE ? 'なし' : ''}`);
+  log(`対象記事: ${filtered.length}件`);
+  log(`ドライラン: ${DRY_RUN}`);
+  log(`レジューム: ${RESUME} (処理済み: ${completedSet.size}件)`);
+  log('============================================================');
+
+  if (filtered.length === 0) {
+    log('対象記事がありません。終了します。');
+    process.exit(0);
+  }
+
+  if (!fs.existsSync(STATE_PATH)) {
+    log(`エラー: 認証状態ファイルが見つかりません: ${STATE_PATH}`);
+    process.exit(1);
+  }
+
+  await launchBrowser();
+
+  // ログイン確認
+  log('ログイン確認中...');
+  await page.goto('https://note.com/dashboard', { waitUntil: 'networkidle', timeout: 30000 });
+  await page.waitForTimeout(2000);
+  if (page.url().includes('login')) {
+    log('エラー: ログインが必要です');
+    await browser.close();
+    process.exit(1);
+  }
+  log('ログイン確認OK');
+
+  let processed = 0;
+  let totalAdded = 0;
+  let totalAlready = 0;
+  let errors = 0;
+  let consecutiveErrors = 0;
+
+  for (let i = 0; i < filtered.length; i++) {
+    const article = filtered[i];
+    processed++;
+    const title = article.title.substring(0, 50);
+    const articleUrl = `https://note.com${article.url}`;
+
+    log(`\n[${processed}/${filtered.length}] ${title}...`);
+
+    try {
+      // 記事ページに移動
+      await page.goto(articleUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await page.waitForTimeout(2000);
+
+      // 「...」メニューボタンを探す
+      const moreButton = await findMoreButton(page);
+      if (!moreButton) {
+        log('  警告: メニューボタンが見つかりません');
+        progress.failed.push(article.url);
+        saveProgress(progress);
+        errors++;
+        consecutiveErrors++;
+        if (consecutiveErrors >= 5) {
+          log('  連続エラー5件 → ブラウザ再起動');
+          await restartBrowser();
+          consecutiveErrors = 0;
+        }
+        continue;
       }
 
-      // すべてのクリック可能な要素を探す
-      const clickables = await page.$$('[role="button"], button, a');
-      log(`クリック可能要素: ${clickables.length}`);
-    }
+      // メニューを開く
+      await moreButton.click();
+      await page.waitForTimeout(1000);
 
-    // Step 2: 年月を選択
-    log(`${YEAR}年${MONTH}月を選択中...`);
-
-    // 年の選択
-    const yearSelector = await page.$(`text=${YEAR}年`) ||
-                         await page.$(`option:has-text("${YEAR}")`) ||
-                         await page.$(`[value="${YEAR}"]`);
-    if (yearSelector) {
-      await yearSelector.click();
-      await page.waitForTimeout(500);
-    }
-
-    // 月の選択
-    const monthSelector = await page.$(`text=${MONTH}月`) ||
-                          await page.$(`option:has-text("${MONTH}月")`) ||
-                          await page.$(`[value="${MONTH}"]`);
-    if (monthSelector) {
-      await monthSelector.click();
-      await page.waitForTimeout(500);
-    }
-
-    await page.waitForTimeout(2000);
-
-    // Step 3: 記事リストを取得
-    log('記事リストを取得中...');
-
-    // 記事のリストアイテムを探す
-    // note.comの記事リストは .o-articleList__item クラスを持つ
-    let articles = await page.$$('.o-articleList__item');
-
-    log(`記事数: ${articles.length}`);
-
-    if (articles.length === 0) {
-      log('記事が見つかりません。ページ構造を調査します...');
-
-      // スクリーンショットを保存
-      await page.screenshot({ path: '/tmp/note-articles-page.png', fullPage: true });
-      log('スクリーンショット保存: /tmp/note-articles-page.png');
-
-      // HTML構造を出力
-      const html = await page.content();
-      fs.writeFileSync('/tmp/note-articles-page.html', html);
-      log('HTML保存: /tmp/note-articles-page.html');
-
-      await browser.close();
-      process.exit(1);
-    }
-
-    // Step 4: 各記事に対してメンバーシップ特典を追加
-    let processed = 0;
-    let added = 0;
-    let skipped = 0;
-    let errors = 0;
-
-    const maxItems = LIMIT > 0 ? Math.min(articles.length, LIMIT) : articles.length;
-
-    for (let i = 0; i < maxItems; i++) {
-      processed++;
-      log(`\n[${processed}/${maxItems}] 記事を処理中...`);
-
-      try {
-        // 記事リストを再取得（DOMが変わる可能性があるため）
-        articles = await page.$$('.o-articleList__item');
-
-        if (i >= articles.length) {
-          log('  記事がなくなりました');
-          break;
+      // 「メンバーシップ特典追加・解除」を探す
+      const membershipMenuItem = await findMembershipMenuItem(page);
+      if (!membershipMenuItem) {
+        log('  警告: メンバーシップメニューが見つかりません');
+        await page.keyboard.press('Escape');
+        progress.failed.push(article.url);
+        saveProgress(progress);
+        errors++;
+        consecutiveErrors++;
+        if (consecutiveErrors >= 5) {
+          log('  連続エラー5件 → ブラウザ再起動');
+          await restartBrowser();
+          consecutiveErrors = 0;
         }
+        continue;
+      }
 
-        const article = articles[i];
+      await membershipMenuItem.click();
+      await page.waitForTimeout(2000);
 
-        // 記事タイトルを取得
-        const titleEl = await article.$('h2, h3, [class*="title"]');
-        const title = titleEl ? (await titleEl.textContent())?.trim().substring(0, 50) : '(タイトル不明)';
-        log(`  タイトル: ${title}...`);
+      // デバッグ
+      if (DEBUG_FIRST || processed <= 2) {
+        await page.screenshot({ path: `/tmp/note-membership-modal-${processed}.png` });
+        log(`  デバッグ: /tmp/note-membership-modal-${processed}.png`);
+      }
 
-        // 三点リーダー（メニュー）を探す - o-articleList__more クラスを使用
-        const menuButton = await article.$('.o-articleList__more') ||
-                           await article.$('[class*="more"]') ||
-                           await article.$('button:has(svg)');
+      // 各プランを処理
+      let articleAdded = 0;
+      let articleAlready = 0;
+      for (const plan of planEntries) {
+        const result = await findPlanAddButton(page, plan.pattern, plan.name);
 
-        if (!menuButton) {
-          log('  警告: メニューボタンが見つかりません、スキップ');
-          skipped++;
+        if (result === 'already_added') {
+          articleAlready++;
           continue;
         }
 
-        // メニューを開く
-        await menuButton.click();
-        await page.waitForTimeout(500);
-
-        // 「メンバーシップ特典追加・解除」をクリック
-        const membershipOption = await page.$('text=メンバーシップ特典追加') ||
-                                 await page.$('[data-testid*="membership"]') ||
-                                 await page.$('text=特典');
-
-        if (!membershipOption) {
-          log('  警告: メンバーシップオプションが見つかりません、スキップ');
-          // メニューを閉じる
-          await page.keyboard.press('Escape');
-          skipped++;
-          continue;
-        }
-
-        await membershipOption.click();
-        await page.waitForTimeout(1500);
-
-        // モーダルが表示されるのを待つ
-        log('  モーダル表示を待機中...');
-
-        // デバッグ用：最初の数件でスクリーンショットを取る
-        if (processed <= 3) {
-          await page.screenshot({ path: `/tmp/note-modal-${processed}.png` });
-          log(`  デバッグ: スクリーンショット保存 /tmp/note-modal-${processed}.png`);
-        }
-
-        // モーダル内の「AIｘ副業 読み放題プラン」の行を探し、その行の「追加」ボタンをクリック
-        // モーダル構造: 各プランは行として並び、右側に「追加」ボタンがある
-
-        let addButton = null;
-        let alreadyAdded = false;
-
-        // デバッグ: モーダル内のテキストを確認
-        if (processed <= 3) {
-          // モーダル要素を特定
-          const modalContent = await page.$$eval('[class*="modal"], [class*="Modal"], [role="dialog"]', modals =>
-            modals.map(m => ({
-              class: m.className,
-              html: m.innerHTML?.substring(0, 2000)
-            }))
-          );
-          log(`  デバッグ: モーダル要素数: ${modalContent.length}`);
-          if (modalContent.length > 0) {
-            // HTMLをファイルに保存
-            const fs = require('fs');
-            fs.writeFileSync(`/tmp/note-modal-html-${processed}.txt`, JSON.stringify(modalContent, null, 2));
-            log(`  デバッグ: モーダルHTML保存: /tmp/note-modal-html-${processed}.txt`);
-          }
-        }
-
-        // モーダル内のプラン一覧から「AIｘ副業」を探す
-        // モーダル構造: modal-content-wrapper > ... > ul > li > div > p(プラン名) + button(追加/追加済)
-
-        // 方法1: モーダル内のliを全て取得し、「AIｘ副業」または「AI x 副業」を含むものを探す
-        try {
-          log('  方法1: モーダル内のプラン一覧を検索...');
-
-          // モーダル内のプラン一覧（li要素）を取得
-          const modalBody = await page.$('.m-basicModalContent__body');
-          if (modalBody) {
-            const planItems = await modalBody.$$('li');
-            log(`  プラン項目数: ${planItems.length}`);
-
-            for (const item of planItems) {
-              const itemText = await item.textContent();
-              log(`  プラン項目テキスト: "${itemText?.substring(0, 50)}..."`);
-
-              // 「副業」を含むプランを探す（AIｘ副業 読み放題プラン）
-              if (itemText && (itemText.includes('副業') || itemText.includes('AI'))) {
-                log('  「副業」を含むプランを発見');
-
-                // この項目内のボタンを探す
-                const btn = await item.$('button.a-button');
-                if (btn) {
-                  const btnText = await btn.textContent();
-                  log(`  ボタンテキスト: "${btnText?.trim()}"`);
-
-                  if (btnText && btnText.includes('追加') && !btnText.includes('追加済')) {
-                    addButton = btn;
-                    log('  「追加」ボタンを発見（モーダル内li検索）');
-                    break;
-                  } else if (btnText && btnText.includes('追加済')) {
-                    alreadyAdded = true;
-                    log('  スキップ: すでにメンバーシップ特典に追加済み');
-                    break;
-                  }
-                }
-              }
-            }
-          } else {
-            log('  警告: モーダル本体が見つかりません');
-          }
-        } catch (e) {
-          log(`  方法1エラー: ${e.message}`);
-        }
-
-        // すでに追加済みの場合はスキップ
-        if (alreadyAdded) {
-          // 「閉じる」ボタンでモーダルを閉じる
-          const closeBtn = await page.$('button:has-text("閉じる")');
-          if (closeBtn) {
-            await closeBtn.click();
-          } else {
-            await page.keyboard.press('Escape');
-          }
-          await page.waitForTimeout(500);
-          skipped++;
-          continue;
-        }
-
-        // 方法2: 直接ボタンを探索（プラン限定公開セクション内の「追加」ボタン、3番目が「AIｘ副業」）
-        if (!addButton) {
-          log('  方法2: プラン限定公開セクション内のボタンを検索...');
-
-          try {
-            // モーダル内のすべての a-button を取得
-            const allModalButtons = await page.$$('.modal-content-wrapper button.a-button');
-            log(`  モーダル内ボタン数: ${allModalButtons.length}`);
-
-            // ボタンを順番にチェック
-            // 構造: メンバー全員に公開(追加済) → AI論文(追加) → AIｘ副業(追加) → 応援プラン(追加)
-            // 3番目の「追加」ボタンが「AIｘ副業」に対応するはず
-            let addButtonIndex = 0;
-            for (let btnIdx = 0; btnIdx < allModalButtons.length; btnIdx++) {
-              const btn = allModalButtons[btnIdx];
-              const btnText = await btn.textContent();
-              const trimmedText = btnText?.trim();
-              log(`  ボタン[${btnIdx}]: "${trimmedText}"`);
-
-              // 「追加」ボタン（「追加済」ではない）をカウント
-              if (trimmedText === '追加') {
-                addButtonIndex++;
-                // 2番目の「追加」ボタンが「AIｘ副業」に対応（スクリーンショットから確認）
-                // メンバー全員に公開 -> AI論文 -> AIｘ副業(2番目) -> 応援プラン
-                if (addButtonIndex === 2) {
-                  addButton = btn;
-                  log(`  「AIｘ副業」の「追加」ボタンを発見（インデックス: ${btnIdx}）`);
-                  break;
-                }
-              }
-            }
-          } catch (e) {
-            log(`  方法2エラー: ${e.message}`);
-          }
-        }
-
-        if (!addButton) {
-          log('  警告: 追加ボタンが見つかりません');
-
-          // デバッグ: モーダル内のすべてのボタンを出力
-          const buttons = await page.$$eval('button', btns =>
-            btns.filter(b => b.offsetParent !== null)
-                .map(b => ({
-                  text: b.textContent?.trim().substring(0, 30),
-                  y: b.getBoundingClientRect().y
-                }))
-          );
-          log(`  可視ボタン: ${JSON.stringify(buttons)}`);
-
-          // 「閉じる」ボタンで閉じる
-          const closeBtn = await page.$('button:has-text("閉じる")');
-          if (closeBtn) {
-            await closeBtn.click();
-          } else {
-            await page.keyboard.press('Escape');
-          }
-          await page.waitForTimeout(500);
-          skipped++;
+        if (!result) {
+          log(`  警告: ${plan.name}プランのボタンが見つかりません`);
           continue;
         }
 
         if (DRY_RUN) {
-          log('  [ドライラン] 追加をスキップ');
-          await page.keyboard.press('Escape');
-          await page.waitForTimeout(500);
-          added++;
+          log(`  [dry] ${plan.name}: 追加可能`);
+          articleAdded++;
           continue;
         }
 
-        // 追加ボタンをクリック
-        log('  追加ボタンをクリック中...');
-        await addButton.click();
+        await result.click();
         await page.waitForTimeout(1500);
+        articleAdded++;
+        log(`  ${plan.name}: 追加`);
+      }
 
-        // 確認モーダルがあれば処理
-        const confirmButton = await page.$('button:has-text("OK")') ||
-                              await page.$('button:has-text("確定")') ||
-                              await page.$('button:has-text("はい")');
-        if (confirmButton) {
-          const isVisible = await confirmButton.isVisible();
-          if (isVisible) {
-            log('  確認ボタンをクリック');
-            await confirmButton.click();
-            await page.waitForTimeout(1000);
-          }
+      totalAdded += articleAdded;
+      totalAlready += articleAlready;
+
+      if (articleAdded > 0 || articleAlready > 0) {
+        const summary = [];
+        if (articleAdded > 0) summary.push(`追加${articleAdded}`);
+        if (articleAlready > 0) summary.push(`済${articleAlready}`);
+        log(`  → ${summary.join(', ')} / ${planEntries.length}プラン`);
+      }
+
+      await closeModal(page);
+      progress.completed.push(article.url);
+      saveProgress(progress);
+      consecutiveErrors = 0;
+
+      // レート制限
+      await page.waitForTimeout(500);
+
+    } catch (err) {
+      log(`  エラー: ${err.message}`);
+      errors++;
+      progress.failed.push(article.url);
+      saveProgress(progress);
+      consecutiveErrors++;
+
+      // ブラウザクラッシュ検出 → 再起動
+      if (err.message.includes('closed') || err.message.includes('crashed') || err.message.includes('Target')) {
+        log('ブラウザクラッシュ検出 → 再起動');
+        try {
+          await restartBrowser();
+          consecutiveErrors = 0;
+        } catch (restartErr) {
+          log(`ブラウザ再起動失敗: ${restartErr.message}`);
+          break;
         }
-
-        log('  成功: メンバーシップ特典に追加しました');
-        added++;
-
-        // モーダルが閉じるのを待つ
-        await page.waitForTimeout(1000);
-
-        // 「閉じる」ボタンでモーダルを閉じる
-        const closeButton = await page.$('button:has-text("閉じる")');
-        if (closeButton) {
-          const isVisible = await closeButton.isVisible();
-          if (isVisible) {
-            log('  「閉じる」ボタンでモーダルを閉じます');
-            await closeButton.click();
-            await page.waitForTimeout(500);
-          }
-        } else {
-          // Escapeで閉じる
-          await page.keyboard.press('Escape');
-          await page.waitForTimeout(500);
+      } else if (consecutiveErrors >= 5) {
+        log('連続エラー5件 → ブラウザ再起動');
+        try {
+          await restartBrowser();
+          consecutiveErrors = 0;
+        } catch (restartErr) {
+          log(`ブラウザ再起動失敗: ${restartErr.message}`);
+          break;
         }
-
-      } catch (err) {
-        log(`  エラー: ${err.message}`);
-        errors++;
-        // エラー時はEscapeで状態をリセット
-        await page.keyboard.press('Escape');
-        await page.waitForTimeout(500);
+      } else {
+        try { await page.keyboard.press('Escape'); } catch {}
+        await new Promise(r => setTimeout(r, 500));
       }
     }
 
-    // 結果サマリー
-    log('\n============================================================');
-    log('処理完了');
-    log(`  処理記事数: ${processed}`);
-    log(`  追加成功: ${added}`);
-    log(`  スキップ: ${skipped}`);
-    log(`  エラー: ${errors}`);
-    log('============================================================');
+    // 100件ごとにレポート
+    if (processed % 100 === 0) {
+      log(`\n--- 中間レポート (${processed}/${filtered.length}) ---`);
+      log(`  追加: ${totalAdded} | 追加済: ${totalAlready} | エラー: ${errors}`);
+    }
+  }
 
-  } catch (err) {
-    log(`致命的エラー: ${err.message}`);
-    // スクリーンショット保存
-    await page.screenshot({ path: '/tmp/note-membership-error.png' });
-    log('エラースクリーンショット: /tmp/note-membership-error.png');
-  } finally {
-    await browser.close();
+  // 最終レポート
+  log('\n============================================================');
+  log('処理完了');
+  log(`  処理記事数: ${processed}`);
+  log(`  プラン追加: ${totalAdded}`);
+  log(`  追加済スキップ: ${totalAlready}`);
+  log(`  エラー: ${errors}`);
+  log(`  完了URL数: ${progress.completed.length}`);
+  log('============================================================');
+
+  try { await browser.close(); } catch {}
+}
+
+// ========== ヘルパー関数 ==========
+
+async function findMoreButton(page) {
+  const byLabel = page.locator('button[aria-label*="メニュー"], button[aria-label*="more"], button[aria-label*="その他"]').first();
+  if (await byLabel.isVisible().catch(() => false)) return byLabel;
+
+  const dotsButtons = page.locator('button:has(svg)');
+  const count = await dotsButtons.count();
+  for (let i = 0; i < count; i++) {
+    const btn = dotsButtons.nth(i);
+    const text = await btn.textContent().catch(() => '');
+    if (text.trim() === '' && await btn.isVisible().catch(() => false)) {
+      const box = await btn.boundingBox().catch(() => null);
+      if (box && box.y < 500) return btn;
+    }
+  }
+
+  const ellipsis = page.locator('button:has-text("…"), button:has-text("⋯")').first();
+  if (await ellipsis.isVisible().catch(() => false)) return ellipsis;
+
+  const byClass = page.locator('[class*="more-button"], [class*="moreButton"], [class*="menu-trigger"]').first();
+  if (await byClass.isVisible().catch(() => false)) return byClass;
+
+  return null;
+}
+
+async function findMembershipMenuItem(page) {
+  const byText = page.locator('text=メンバーシップ特典').first();
+  if (await byText.isVisible().catch(() => false)) return byText;
+
+  const byPartial = page.locator('text=メンバーシップ').first();
+  if (await byPartial.isVisible().catch(() => false)) return byPartial;
+
+  const menuItems = page.locator('[role="menuitem"], [class*="dropdown"] a, [class*="menu"] a, [class*="popup"] a, [class*="menu"] li');
+  const count = await menuItems.count();
+  for (let i = 0; i < count; i++) {
+    const item = menuItems.nth(i);
+    const text = await item.textContent().catch(() => '');
+    if (text.includes('メンバーシップ') || text.includes('特典')) return item;
+  }
+
+  return null;
+}
+
+async function findPlanAddButton(page, planPattern, planName) {
+  try {
+    const listItems = page.locator('[class*="modal"] li, [role="dialog"] li, [class*="Modal"] li');
+    const count = await listItems.count();
+    for (let i = 0; i < count; i++) {
+      const item = listItems.nth(i);
+      const text = await item.textContent().catch(() => '');
+      if (text.includes(planPattern)) {
+        if (text.includes('追加済') || text.includes('解除')) return 'already_added';
+        const addBtn = item.locator('button:has-text("追加")').first();
+        if (await addBtn.isVisible().catch(() => false)) {
+          const btnText = await addBtn.textContent().catch(() => '');
+          return btnText.includes('追加済') ? 'already_added' : addBtn;
+        }
+      }
+    }
+  } catch {}
+
+  try {
+    const planText = page.getByText(planPattern, { exact: false }).first();
+    if (await planText.isVisible().catch(() => false)) {
+      for (const ancestor of ['..', '../..', '../../..']) {
+        const parent = planText.locator(ancestor).first();
+        const fullText = await parent.textContent().catch(() => '');
+        if (fullText.includes('追加済') || fullText.includes('解除')) return 'already_added';
+        const addBtn = parent.locator('button:has-text("追加")').first();
+        if (await addBtn.isVisible().catch(() => false)) {
+          const btnText = await addBtn.textContent().catch(() => '');
+          if (!btnText.includes('追加済')) return addBtn;
+        }
+      }
+    }
+  } catch {}
+
+  return null;
+}
+
+async function closeModal(page) {
+  try {
+    const closeBtn = page.locator('button:has-text("閉じる")').first();
+    if (await closeBtn.isVisible().catch(() => false)) {
+      await closeBtn.click();
+      await page.waitForTimeout(500);
+      return;
+    }
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(500);
+  } catch {
+    try { await page.keyboard.press('Escape'); } catch {}
+    await new Promise(r => setTimeout(r, 300));
   }
 }
 
